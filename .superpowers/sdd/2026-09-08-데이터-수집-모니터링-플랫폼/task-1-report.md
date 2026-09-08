@@ -44,3 +44,46 @@
 
 - 현재 CI 구성은 후속 작업에서 추가해야 한다. 이 작업은 로컬 공통 명령과
   최소 앱 기반만 구성한다.
+
+## Fix round 1: 품질 검토 반영
+
+### 변경
+
+- 루트 `package.json`의 Node.js 최소 버전을 Vite 7.3.6 요구사항과 일치하는
+  `>=22.12.0`으로 올렸다.
+- `test:api`는 운영체제별 `.venv/Scripts` 경로 대신, 활성화한 가상환경의
+  `python -m pytest`를 사용하도록 바꿨다.
+- 웹 `lint` 명령을 TypeScript 타입 검사에서 `eslint . --max-warnings=0`으로
+  교체하고 `apps/web/eslint.config.js` 및 ESLint TypeScript 설정을 추가했다.
+- `vite`와 `@vitejs/plugin-react`를 웹 런타임 의존성에서 개발 의존성으로
+  옮기고 잠금 파일을 갱신했다.
+- README에 Node.js 최소 버전과 Windows/macOS/Linux별 API 가상환경 활성화
+  절차를 기록했다.
+
+### Covering test 파일
+
+- `apps/api/tests/test_package.py`: 활성화한 Python 3.12 가상환경에서 API
+  패키지 import를 검증한다.
+- `apps/web/src/app.test.tsx`: Vitest로 웹 앱의 모니터링 제목 렌더링을
+  검증한다.
+
+### 실행 명령과 결과
+
+| 명령 | 결과 |
+| --- | --- |
+| `npm test` | 통과: Vitest 1개 |
+| `npm run test:api` | 통과: 활성화한 API 가상환경에서 pytest 1개 |
+| `npm run lint` | 통과: ESLint 경고 0개 |
+| `npm run typecheck` | 통과 |
+| `npm run build` | 통과: Vite 프로덕션 빌드 생성 |
+
+### Self-review
+
+- Node.js 제약은 설치된 Vite 7.3.6의 `>=22.12.0` 요구사항과 일치한다.
+- API 테스트 명령은 Windows, macOS, Linux 모두에서 활성화한 가상환경의
+  `python`을 사용하므로 운영체제 전용 실행 파일 경로를 포함하지 않는다.
+- `lint`는 이제 ESLint가 실제 TypeScript/TSX/Vite 설정 파일을 검사하고,
+  `typecheck`는 별도 TypeScript 컴파일 검증을 유지한다.
+- Vite와 React 플러그인은 빌드·개발에만 필요하므로 `devDependencies`에
+  있으며, 브라우저 런타임 의존성은 React와 React DOM만 남는다.
+- 기존 미커밋 구현계획 문서는 수정하거나 스테이징하지 않는다.

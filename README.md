@@ -20,8 +20,9 @@ docs/
 
 ## 개발 명령
 
-먼저 Node.js 22 이상과 Python 3.12를 준비합니다. API 가상환경은
-`apps/api/.venv`에 생성하며, Windows에서는 다음과 같이 실행합니다.
+먼저 Node.js 22.12.0 이상과 Python 3.12를 준비합니다. API 가상환경은
+`apps/api/.venv`에 생성하며, 사용 중인 운영체제에 맞는 활성화 명령을 실행한
+상태에서 API 테스트를 실행합니다.
 
 ```powershell
 # 웹 의존성 설치
@@ -30,6 +31,15 @@ npm install
 # API 가상환경 생성 및 pytest 설치
 py -3.12 -m venv apps/api/.venv
 apps/api/.venv/Scripts/python.exe -m pip install pytest
+apps/api/.venv/Scripts/Activate.ps1
+```
+
+macOS 또는 Linux에서는 다음 명령을 사용합니다.
+
+```bash
+python3.12 -m venv apps/api/.venv
+apps/api/.venv/bin/python -m pip install pytest
+source apps/api/.venv/bin/activate
 ```
 
 루트에서 공통 명령을 실행할 수 있습니다.

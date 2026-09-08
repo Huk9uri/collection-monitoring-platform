@@ -7,12 +7,12 @@
   ],
   "scripts": {
     "test": "npm run test --workspace=@collection-monitoring/web",
-    "test:api": "cd apps/api && .venv\\Scripts\\python.exe -m pytest",
+    "test:api": "cd apps/api && python -m pytest",
     "lint": "npm run lint --workspace=@collection-monitoring/web",
     "typecheck": "npm run typecheck --workspace=@collection-monitoring/web",
     "build": "npm run build --workspace=@collection-monitoring/web"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12.0"
   }
 }
