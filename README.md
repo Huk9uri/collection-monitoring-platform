@@ -28,9 +28,9 @@ docs/
 # 웹 의존성 설치
 npm install
 
-# API 가상환경 생성 및 pytest 설치
+# API 및 테스트 의존성 설치
 py -3.12 -m venv apps/api/.venv
-apps/api/.venv/Scripts/python.exe -m pip install pytest
+apps/api/.venv/Scripts/python.exe -m pip install -e "apps/api[test]"
 apps/api/.venv/Scripts/Activate.ps1
 ```
 
@@ -38,7 +38,7 @@ macOS 또는 Linux에서는 다음 명령을 사용합니다.
 
 ```bash
 python3.12 -m venv apps/api/.venv
-apps/api/.venv/bin/python -m pip install pytest
+apps/api/.venv/bin/python -m pip install -e "apps/api[test]"
 source apps/api/.venv/bin/activate
 ```
 
