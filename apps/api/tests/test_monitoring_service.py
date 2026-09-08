@@ -184,3 +184,31 @@ def test_runs_excludes_failed_adapter_from_total_and_reports_failure() -> None:
     assert result.total == 1
     assert [run.run_id for run in result.items] == ["ok"]
     assert [error.collector_id for error in result.errors] == ["broken"]
+
+
+def test_same_started_at_candidate_boundary_uses_run_id_desc_order() -> None:
+    tied_at = datetime(2026, 9, 8, 1, tzinfo=UTC)
+
+    def tied_run(collector_id: str, run_id: str) -> CollectorRun:
+        return make_run(collector_id, run_id, 0).model_copy(
+            update={"started_at": tied_at}
+        )
+
+    first = PagedAdapter(
+        "z-collector",
+        [
+            tied_run("z-collector", "run-z"),
+            tied_run("z-collector", "run-y"),
+            tied_run("z-collector", "run-x"),
+        ],
+    )
+    second = PagedAdapter(
+        "a-collector",
+        [tied_run("a-collector", "run-z"), tied_run("a-collector", "run-y")],
+    )
+
+    result = MonitoringService([first, second]).list_runs(offset=1, limit=1)
+
+    assert [run.run_id for run in result.items] == ["run-y"]
+    assert first.list_calls[0]["limit"] == 2
+    assert second.list_calls[0]["limit"] == 2

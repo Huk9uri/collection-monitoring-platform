@@ -18,6 +18,7 @@ from monitoring_api.services.monitoring import (
 )
 
 MAX_PAGE_SIZE = 100
+MAX_OFFSET = 10_000
 MAX_RUN_RANGE = timedelta(days=93)
 
 
@@ -57,14 +58,20 @@ def _resolve_run_range(
                 detail="조회 시각은 UTC여야 합니다.",
             )
 
-    if started_from is None and started_to is None:
-        started_to = datetime.now(UTC)
-        started_from = started_to - MAX_RUN_RANGE
-    elif started_from is None:
-        assert started_to is not None
-        started_from = started_to - MAX_RUN_RANGE
-    elif started_to is None:
-        started_to = started_from + MAX_RUN_RANGE
+    try:
+        if started_from is None and started_to is None:
+            started_to = datetime.now(UTC)
+            started_from = started_to - MAX_RUN_RANGE
+        elif started_from is None:
+            assert started_to is not None
+            started_from = started_to - MAX_RUN_RANGE
+        elif started_to is None:
+            started_to = started_from + MAX_RUN_RANGE
+    except OverflowError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="조회 기간이 지원되는 날짜 범위를 벗어났습니다.",
+        ) from exc
 
     started_from = started_from.astimezone(UTC)
     started_to = started_to.astimezone(UTC)
@@ -101,7 +108,10 @@ def runs(
     collector_id: Annotated[str | None, Query()] = None,
     started_from: Annotated[datetime | None, Query()] = None,
     started_to: Annotated[datetime | None, Query()] = None,
-    offset: Annotated[int, Query(ge=0)] = 0,
+    offset: Annotated[
+        int,
+        Query(ge=0, le=MAX_OFFSET, description="조회 시작 위치, 최대 10,000"),
+    ] = 0,
     page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 50,
 ) -> RunPageResult:
     """실행 이력을 제한된 기간과 페이지 크기로 조회한다."""

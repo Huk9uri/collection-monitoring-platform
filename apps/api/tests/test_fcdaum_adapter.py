@@ -297,6 +297,11 @@ def test_all_fcdaum_fixed_queries_pass_the_read_only_validator() -> None:
         ReadOnlyRepository._validate_select(sql)
 
 
+def test_fcdaum_run_queries_have_a_total_candidate_order() -> None:
+    assert "ORDER BY StartedAt DESC, RunId DESC" in FCDAUM_LATEST_SQL
+    assert "ORDER BY StartedAt DESC, RunId DESC" in FCDAUM_LIST_SQL
+
+
 def test_read_only_validator_allows_a_single_tsql_cte_query() -> None:
     ReadOnlyRepository._validate_select(
         "WITH latest AS (SELECT MAX(StartedAt) AS started_at "

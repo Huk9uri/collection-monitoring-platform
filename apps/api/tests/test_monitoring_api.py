@@ -221,6 +221,18 @@ def test_runs_without_dates_uses_a_server_utc_93_day_range(
     assert started_from == started_to - timedelta(days=93)
 
 
+def test_runs_accepts_maximum_offset(
+    client: TestClient, available_adapter: AvailableAdapter
+) -> None:
+    response = client.get(
+        "/api/v1/monitoring/runs",
+        params={"collector_id": "available", "offset": 10_000},
+    )
+
+    assert response.status_code == 200
+    assert available_adapter.list_calls[-1]["offset"] == 10_000
+
+
 @pytest.mark.parametrize(
     "params,expected_from,expected_to",
     [
@@ -276,6 +288,7 @@ def test_all_collectors_runs_never_exceeds_the_global_page_size(
     "params",
     [
         {"offset": -1},
+        {"offset": 10_001},
         {"page_size": 0},
         {"page_size": 101},
         {
@@ -298,6 +311,24 @@ def test_runs_rejects_invalid_query_conditions(
     response = client.get("/api/v1/monitoring/runs", params=params)
 
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"started_from": "9999-12-31T23:59:59.999999Z"},
+        {"started_to": "0001-01-01T00:00:00Z"},
+    ],
+)
+def test_run_range_overflow_is_a_safe_422(
+    client: TestClient, params: dict[str, str]
+) -> None:
+    response = client.get("/api/v1/monitoring/runs", params=params)
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": "조회 기간이 지원되는 날짜 범위를 벗어났습니다."
+    }
 
 
 @pytest.mark.parametrize(
@@ -408,6 +439,12 @@ def test_monitoring_openapi_declares_only_get_operations() -> None:
         "/api/v1/monitoring/freshness",
     }
     assert all(set(operations) == {"get"} for operations in monitoring_paths.values())
+    run_parameters = monitoring_paths["/api/v1/monitoring/runs"]["get"]["parameters"]
+    offset_parameter = next(
+        parameter for parameter in run_parameters if parameter["name"] == "offset"
+    )
+    assert offset_parameter["schema"]["maximum"] == 10_000
+    assert "최대 10,000" in offset_parameter["description"]
 
 
 @pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])

@@ -307,3 +307,8 @@ def test_all_hmr_fixed_queries_pass_the_read_only_validator() -> None:
         HMR_FRESHNESS_SQL,
     ):
         ReadOnlyRepository._validate_select(sql)
+
+
+def test_hmr_run_queries_have_a_total_candidate_order() -> None:
+    assert "ORDER BY StartedAt DESC, RunId DESC" in HMR_LATEST_SQL
+    assert "ORDER BY StartedAt DESC, RunId DESC" in HMR_LIST_SQL
