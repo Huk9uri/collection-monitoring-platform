@@ -1,3 +1,23 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { useState } from 'react'
+
+import { MonitoringPage } from './features/monitoring/monitoring-page'
+
 export function App() {
-  return <h1>데이터 수집 모니터링</h1>
+  const [queryClient] = useState(
+    () =>
+      new QueryClient({
+        defaultOptions: {
+          queries: {
+            retry: false,
+          },
+        },
+      }),
+  )
+
+  return (
+    <QueryClientProvider client={queryClient}>
+      <MonitoringPage />
+    </QueryClientProvider>
+  )
 }
