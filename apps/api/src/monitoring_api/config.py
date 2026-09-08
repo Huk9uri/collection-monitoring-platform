@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Annotated
 
-from pydantic import field_validator
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     """배포 환경에서 주입되는 API 설정이다."""
 
     cors_origins: Annotated[tuple[str, ...], NoDecode] = ()
+    fcdaum_connection_string: SecretStr | None = None
+    hmr_connection_string: SecretStr | None = None
 
     model_config = SettingsConfigDict(
         env_prefix="MONITORING_",

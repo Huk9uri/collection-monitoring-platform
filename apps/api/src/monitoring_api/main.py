@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from monitoring_api.api.monitoring import router as monitoring_router
+from monitoring_api.composition import build_monitoring_service
 from monitoring_api.config import Settings, get_settings
 from monitoring_api.services.monitoring import (
     CollectorReadiness,
@@ -37,7 +38,9 @@ def create_app(
     """설정된 CORS 경계를 가진 FastAPI 애플리케이션을 생성한다."""
 
     resolved_settings = settings or get_settings()
-    resolved_service = monitoring_service or MonitoringService([])
+    resolved_service = monitoring_service or build_monitoring_service(
+        resolved_settings
+    )
     app = FastAPI(title="데이터 수집 모니터링 API")
     app.state.monitoring_service = resolved_service
     app.add_middleware(
@@ -66,12 +69,20 @@ def create_app(
 
         result = resolved_service.readiness()
         is_ready = bool(result.items) and all(item.ready for item in result.items)
+        errors = result.errors
+        if not result.items:
+            errors = [
+                SourceError(
+                    collector_id="configuration",
+                    message="등록된 모니터링 데이터 소스가 없습니다.",
+                )
+            ]
         if not is_ready:
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return ReadinessResponse(
             status="ok" if is_ready else "unavailable",
             items=result.items,
-            errors=result.errors,
+            errors=errors,
         )
 
     return app
