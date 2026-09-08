@@ -14,6 +14,7 @@ from monitoring_api.adapters.fcdaum import (
     FcDaumAdapter,
 )
 from monitoring_api.db import ReadOnlyRepository, ensure_read_only_connection_string
+from monitoring_api.services.monitoring import MonitoringService
 
 
 class FixtureRepository:
@@ -298,8 +299,72 @@ def test_all_fcdaum_fixed_queries_pass_the_read_only_validator() -> None:
 
 
 def test_fcdaum_run_queries_have_a_total_candidate_order() -> None:
-    assert "ORDER BY StartedAt DESC, RunId DESC" in FCDAUM_LATEST_SQL
-    assert "ORDER BY StartedAt DESC, RunId DESC" in FCDAUM_LIST_SQL
+    order = "ORDER BY StartedAt DESC, CONVERT(char(36), RunId) DESC"
+    assert order in FCDAUM_LATEST_SQL
+    assert order in FCDAUM_LIST_SQL
+
+
+def test_fcdaum_uuid_candidate_boundary_uses_service_string_order() -> None:
+    """동일 StartedAt 후보는 서비스의 UUID 문자열 순서와 같아야 한다."""
+
+    # SQL Server uniqueidentifier의 기본 역순은 끝 여섯 바이트가 우선하므로,
+    # UUID 문자열 역순과 다르다. 전체 네 건 중 offset + limit 후보는 세 건이다.
+    native_order = [
+        "4aaaaaaa-bbbb-cccc-dddd-4eeeeeeeeeee",
+        "1aaaaaaa-bbbb-cccc-dddd-3eeeeeeeeeee",
+        "3aaaaaaa-bbbb-cccc-dddd-2eeeeeeeeeee",
+        "2aaaaaaa-bbbb-cccc-dddd-1eeeeeeeeeee",
+    ]
+    string_order = [
+        "4aaaaaaa-bbbb-cccc-dddd-4eeeeeeeeeee",
+        "3aaaaaaa-bbbb-cccc-dddd-2eeeeeeeeeee",
+        "2aaaaaaa-bbbb-cccc-dddd-1eeeeeeeeeee",
+        "1aaaaaaa-bbbb-cccc-dddd-3eeeeeeeeeee",
+    ]
+    tied_at = datetime(2026, 9, 8, 1)
+    rows_by_run_id = {
+        run_id: {
+            "run_id": run_id,
+            "scheduled_date": date(2026, 9, 8),
+            "started_at": tied_at,
+            "completed_at": datetime(2026, 9, 8, 1, 1),
+            "raw_status": "SUCCESS",
+            "successful_units": 1,
+            "failed_units": 0,
+        }
+        for run_id in native_order
+    }
+
+    class SqlServerGuidOrderingRepository:
+        def fetch_all(
+            self, sql: str, parameters: tuple[object, ...] = ()
+        ) -> list[dict[str, object]]:
+            if sql == FCDAUM_COUNT_SQL:
+                return [{"total": len(rows_by_run_id)}]
+            if sql == FCDAUM_LIST_SQL:
+                offset, limit = parameters[-2:]
+                ordered_ids = (
+                    string_order
+                    if "CONVERT(char(36), RunId) DESC" in sql
+                    else native_order
+                )
+                return [
+                    rows_by_run_id[run_id]
+                    for run_id in ordered_ids[int(offset) : int(offset) + int(limit)]
+                ]
+            return []
+
+        def ping(self) -> bool:
+            return True
+
+    result = MonitoringService([FcDaumAdapter(SqlServerGuidOrderingRepository())]).list_runs(
+        offset=1,
+        limit=2,
+    )
+
+    assert native_order != string_order
+    assert result.total == 4
+    assert [run.run_id for run in result.items] == string_order[1:3]
 
 
 def test_read_only_validator_allows_a_single_tsql_cte_query() -> None:
