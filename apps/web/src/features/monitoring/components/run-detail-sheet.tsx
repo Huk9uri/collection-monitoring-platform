@@ -26,13 +26,30 @@ interface RunDetailSheetProps {
 }
 
 function attemptOutcome(attempt: CollectorAttempt) {
-  const failed =
-    attempt.committed === false ||
-    /FAILED|FAILURE|ERROR|ABORTED/i.test(attempt.raw_status)
+  const status = attempt.raw_status.trim().toUpperCase()
 
-  return failed
-    ? { label: '실패', variant: 'incident' as const }
-    : { label: '성공', variant: 'healthy' as const }
+  if (
+    (status === 'SUCCESS' || status === 'SUCCESS_EMPTY') &&
+    attempt.committed !== false
+  ) {
+    return { label: '성공', variant: 'healthy' as const }
+  }
+  if (
+    attempt.committed === false ||
+    /FAILED|FAILURE|ERROR|ABORTED/.test(status)
+  ) {
+    return { label: '실패', variant: 'incident' as const }
+  }
+  if (status === 'RUNNING') {
+    return { label: '실행 중', variant: 'outline' as const }
+  }
+  if (status === 'NOT_RUN') {
+    return { label: '미실행', variant: 'outline' as const }
+  }
+  if (status === 'WARNING') {
+    return { label: '주의', variant: 'warning' as const }
+  }
+  return { label: '상태 확인 필요', variant: 'warning' as const }
 }
 
 export function RunDetailSheet({

@@ -74,14 +74,24 @@ class PagedAdapter(AvailableAdapter):
         self.list_calls.append(conditions)
         offset = int(conditions["offset"])
         limit = int(conditions["limit"])
-        return self.runs[offset : offset + limit]
+        status = conditions.get("status")
+        filtered = [
+            run for run in self.runs if status is None or run.status is status
+        ]
+        return filtered[offset : offset + limit]
 
     def count_runs(self, **conditions: object) -> int:
         self.count_calls.append(conditions)
-        return len(self.runs)
+        status = conditions.get("status")
+        return sum(status is None or run.status is status for run in self.runs)
 
 
-def make_run(collector_id: str, run_id: str, minute: int) -> CollectorRun:
+def make_run(
+    collector_id: str,
+    run_id: str,
+    minute: int,
+    status: MonitoringStatus = MonitoringStatus.SUCCESS,
+) -> CollectorRun:
     started_at = datetime(2026, 9, 8, 1, tzinfo=UTC) - timedelta(minutes=minute)
     return CollectorRun(
         collector_id=collector_id,
@@ -89,7 +99,7 @@ def make_run(collector_id: str, run_id: str, minute: int) -> CollectorRun:
         scheduled_date=date(2026, 9, 8),
         started_at=started_at,
         completed_at=started_at + timedelta(minutes=1),
-        status=MonitoringStatus.SUCCESS,
+        status=status,
         successful_units=1,
         failed_units=0,
         source_count=1,
@@ -184,6 +194,46 @@ def test_runs_excludes_failed_adapter_from_total_and_reports_failure() -> None:
     assert result.total == 1
     assert [run.run_id for run in result.items] == ["ok"]
     assert [error.collector_id for error in result.errors] == ["broken"]
+
+
+def test_status_filter_is_applied_before_adapter_pagination_and_count() -> None:
+    adapter = PagedAdapter(
+        "collector",
+        [
+            make_run("collector", "success-first-page", 0),
+            make_run(
+                "collector",
+                "failed-second-page",
+                1,
+                MonitoringStatus.FAILED,
+            ),
+        ],
+    )
+
+    result = MonitoringService([adapter]).list_runs(
+        status=MonitoringStatus.FAILED,
+        offset=0,
+        limit=1,
+    )
+
+    assert [run.run_id for run in result.items] == ["failed-second-page"]
+    assert result.total == 1
+    assert adapter.count_calls == [
+        {
+            "started_from": None,
+            "started_to": None,
+            "status": MonitoringStatus.FAILED,
+        }
+    ]
+    assert adapter.list_calls == [
+        {
+            "started_from": None,
+            "started_to": None,
+            "status": MonitoringStatus.FAILED,
+            "offset": 0,
+            "limit": 1,
+        }
+    ]
 
 
 def test_same_started_at_candidate_boundary_uses_run_id_desc_order() -> None:

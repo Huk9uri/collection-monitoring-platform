@@ -7,6 +7,7 @@ describe('monitoringQueries', () => {
     const conditions = {
       collectorId: 'fcdaum',
       startedFrom: '2026-09-01T00:00:00Z',
+      status: 'FAILED' as const,
       offset: 50,
       pageSize: 50,
     }

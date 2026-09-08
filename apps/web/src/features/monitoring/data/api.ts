@@ -48,6 +48,7 @@ export async function getRuns(conditions: RunsQueryConditions) {
       collector_id: validated.collectorId,
       started_from: validated.startedFrom,
       started_to: validated.startedTo,
+      status: validated.status,
       offset: validated.offset,
       page_size: validated.pageSize,
     },

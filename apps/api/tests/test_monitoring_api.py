@@ -186,6 +186,7 @@ def test_runs_accepts_exact_maximum_range_and_page_size(
             "collector_id": "available",
             "started_from": "2026-06-07T00:00:00Z",
             "started_to": "2026-09-08T00:00:00Z",
+            "status": "PARTIAL_FAILED",
             "offset": 7,
             "page_size": 100,
         },
@@ -196,6 +197,7 @@ def test_runs_accepts_exact_maximum_range_and_page_size(
         {
             "started_from": datetime(2026, 6, 7, tzinfo=UTC),
             "started_to": datetime(2026, 9, 8, tzinfo=UTC),
+            "status": MonitoringStatus.PARTIAL_FAILED,
             "offset": 7,
             "limit": 100,
         }
@@ -303,6 +305,8 @@ def test_all_collectors_runs_never_exceeds_the_global_page_size(
             "started_from": "2026-09-01T09:00:00+09:00",
             "started_to": "2026-09-08T00:00:00Z",
         },
+        {"status": "PARTIAL"},
+        {"status": "UNKNOWN"},
     ],
 )
 def test_runs_rejects_invalid_query_conditions(
@@ -445,6 +449,12 @@ def test_monitoring_openapi_declares_only_get_operations() -> None:
     )
     assert offset_parameter["schema"]["maximum"] == 10_000
     assert "최대 10,000" in offset_parameter["description"]
+    status_parameter = next(
+        parameter for parameter in run_parameters if parameter["name"] == "status"
+    )
+    assert status_parameter["schema"]["anyOf"][0]["$ref"].endswith(
+        "/MonitoringStatus"
+    )
 
 
 @pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])

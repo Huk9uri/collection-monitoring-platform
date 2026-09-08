@@ -63,6 +63,10 @@ describe('monitoring API', () => {
         startedTo: '2026-09-07T23:59:59Z',
       },
     },
+    {
+      name: 'canonical enum이 아닌 상태',
+      conditions: { status: 'PARTIAL' } as unknown as RunsQueryConditions,
+    },
   ])('$name 조건은 HTTP 요청 전에 거부한다', async ({ conditions }) => {
     const request = vi.spyOn(apiClient, 'get')
 
@@ -79,6 +83,7 @@ describe('monitoring API', () => {
       collectorId: 'fcdaum',
       startedFrom: '2026-06-07T00:00:00Z',
       startedTo: '2026-09-08T00:00:00Z',
+      status: 'PARTIAL_FAILED',
       offset: 10_000,
       pageSize: 100,
     })
@@ -88,6 +93,7 @@ describe('monitoring API', () => {
         collector_id: 'fcdaum',
         started_from: '2026-06-07T00:00:00Z',
         started_to: '2026-09-08T00:00:00Z',
+        status: 'PARTIAL_FAILED',
         offset: 10_000,
         page_size: 100,
       },

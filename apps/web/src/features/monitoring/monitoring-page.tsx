@@ -70,7 +70,7 @@ function readUrlState(): MonitoringUrlState {
   }
 }
 
-function writeUrlState(state: MonitoringUrlState) {
+function writeUrlState(state: MonitoringUrlState, replace = false) {
   const params = new URLSearchParams()
   const { filters, page } = state
 
@@ -81,11 +81,12 @@ function writeUrlState(state: MonitoringUrlState) {
   if (page > 1) params.set('page', String(page))
 
   const search = params.toString()
-  window.history.pushState(
-    null,
-    '',
-    `${window.location.pathname}${search ? `?${search}` : ''}`,
-  )
+  const url = `${window.location.pathname}${search ? `?${search}` : ''}`
+  if (replace) {
+    window.history.replaceState(null, '', url)
+  } else {
+    window.history.pushState(null, '', url)
+  }
 }
 
 function seoulDayBoundary(value: string, endOfDay: boolean) {
@@ -104,6 +105,7 @@ export function MonitoringPage() {
   const queryClient = useQueryClient()
   const [urlState, setUrlState] = useState(readUrlState)
   const [selectedRun, setSelectedRun] = useState<SelectedRun | null>(null)
+  const [initialQueriesSettled, setInitialQueriesSettled] = useState(false)
   const isFetching = useIsFetching({ queryKey: ['monitoring'] }) > 0
 
   useEffect(() => {
@@ -117,6 +119,7 @@ export function MonitoringPage() {
       collectorId: urlState.filters.collector || undefined,
       startedFrom: seoulDayBoundary(urlState.filters.from, false),
       startedTo: seoulDayBoundary(urlState.filters.to, true),
+      status: urlState.filters.status || undefined,
       offset: (urlState.page - 1) * RUNS_PAGE_SIZE,
       pageSize: RUNS_PAGE_SIZE,
     }),
@@ -139,7 +142,11 @@ export function MonitoringPage() {
     freshnessQuery,
     runsQuery,
   ]
-  const allPending = primaryQueries.every((query) => query.isPending)
+  const allPrimaryQueriesSettled = primaryQueries.every(
+    (query) => !query.isPending,
+  )
+  const initialLoading =
+    !initialQueriesSettled && !allPrimaryQueriesSettled
   const allFailed = primaryQueries.every((query) => query.isError)
   const sourceErrors = collectSourceErrors(primaryQueries)
   const failedAreas = [
@@ -155,6 +162,26 @@ export function MonitoringPage() {
     (collectorsQuery.data?.items.length ?? 0) === 0 &&
     (freshnessQuery.data?.items.length ?? 0) === 0 &&
     (runsQuery.data?.items.length ?? 0) === 0
+
+  useEffect(() => {
+    if (allPrimaryQueriesSettled) {
+      setInitialQueriesSettled(true)
+    }
+  }, [allPrimaryQueriesSettled])
+
+  useEffect(() => {
+    if (runsQuery.data === undefined) return
+
+    const lastPage = Math.min(
+      MAX_RUNS_PAGE,
+      Math.max(1, Math.ceil(runsQuery.data.total / RUNS_PAGE_SIZE)),
+    )
+    if (urlState.page <= lastPage) return
+
+    const correctedState = { ...urlState, page: lastPage }
+    writeUrlState(correctedState, true)
+    setUrlState(correctedState)
+  }, [runsQuery.data, urlState])
 
   function refresh() {
     void queryClient.invalidateQueries({ queryKey: ['monitoring'] })
@@ -191,7 +218,7 @@ export function MonitoringPage() {
 
   return (
     <AppLayout header={<PageHeader onRefresh={refresh} isRefreshing={isFetching} />}>
-      {allPending ? (
+      {initialLoading ? (
         <MonitoringLoading />
       ) : allFailed ? (
         <MonitoringError onRetry={refresh} />

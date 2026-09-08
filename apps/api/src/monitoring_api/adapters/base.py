@@ -82,6 +82,7 @@ class CollectorAdapter(Protocol):
         *,
         started_from: datetime | None = None,
         started_to: datetime | None = None,
+        status: MonitoringStatus | None = None,
         offset: int = 0,
         limit: int = 50,
     ) -> list[CollectorRun]: ...
@@ -91,6 +92,7 @@ class CollectorAdapter(Protocol):
         *,
         started_from: datetime | None = None,
         started_to: datetime | None = None,
+        status: MonitoringStatus | None = None,
     ) -> int: ...
 
     def get_run(self, run_id: str) -> CollectorRun | None: ...

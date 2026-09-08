@@ -57,9 +57,6 @@ export function RunsTable({
   onPageChange,
   onSelectRun,
 }: RunsTableProps) {
-  const filteredRuns = filters.status
-    ? runs.filter((run) => run.status === filters.status)
-    : runs
   const totalPages = Math.min(
     MAX_RUNS_PAGE,
     Math.max(1, Math.ceil(total / RUNS_PAGE_SIZE)),
@@ -147,14 +144,14 @@ export function RunsTable({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredRuns.length === 0 ? (
+              {runs.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
                     선택한 조건의 실행 이력이 없습니다.
                   </TableCell>
                 </TableRow>
               ) : (
-                filteredRuns.map((run) => (
+                runs.map((run) => (
                   <TableRow key={`${run.collector_id}:${run.run_id}`}>
                     <TableCell>
                       <button

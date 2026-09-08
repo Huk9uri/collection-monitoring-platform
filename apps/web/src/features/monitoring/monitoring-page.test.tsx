@@ -4,6 +4,7 @@ import {
   type QueryClientConfig,
 } from '@tanstack/react-query'
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -76,6 +77,14 @@ const partialFailedRun: CollectorRun = {
   ],
 }
 
+const failedRun: CollectorRun = {
+  ...successfulRun,
+  run_id: 'run-failed-on-later-unfiltered-page',
+  status: 'FAILED',
+  successful_units: 0,
+  failed_units: 1,
+}
+
 const freshness: FreshnessRecord[] = [
   {
     collector_id: 'hmr',
@@ -112,7 +121,7 @@ function mockApi({
   pending = false,
   rejectAll = false,
 }: ApiScenario = {}) {
-  return vi.spyOn(apiClient, 'get').mockImplementation(async (path) => {
+  return vi.spyOn(apiClient, 'get').mockImplementation(async (path, config) => {
     if (pending) {
       await new Promise(() => undefined)
     }
@@ -121,10 +130,15 @@ function mockApi({
     }
 
     const url = String(path)
+    const params = config?.params as Record<string, unknown> | undefined
+    const requestedStatus = params?.status
+    const serverRuns = requestedStatus
+      ? runs.filter((run) => run.status === requestedStatus)
+      : runs
     const data = url.endsWith('/freshness')
       ? { items: freshnessItems, errors }
       : url.endsWith('/runs')
-        ? { items: runs, errors, total }
+        ? { items: serverRuns, errors, total }
         : url.includes('/runs/')
           ? { items: [partialFailedRun], errors: [] }
           : { items: runs, errors }
@@ -151,6 +165,14 @@ function renderPage() {
   )
 
   return { ...result, queryClient }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
 }
 
 afterEach(() => {
@@ -180,6 +202,46 @@ describe('MonitoringPage', () => {
         name: '모니터링 데이터를 불러오는 중입니다.',
       }),
     ).toBeTruthy()
+  })
+
+  it('필수 초기 조회는 서로 다른 순서로 완료되어도 모두 settled될 때까지 로딩을 유지한다', async () => {
+    const collectors = deferred<never>()
+    const freshnessResult = deferred<never>()
+    const runs = deferred<never>()
+    vi.spyOn(apiClient, 'get').mockImplementation(async (path) => {
+      const url = String(path)
+      if (url.endsWith('/summary')) {
+        return { data: { items: [], errors: [] } } as never
+      }
+      if (url.endsWith('/collectors')) return collectors.promise
+      if (url.endsWith('/freshness')) return freshnessResult.promise
+      return runs.promise
+    })
+    renderPage()
+
+    await waitFor(() => {
+      expect(apiClient.get).toHaveBeenCalledTimes(4)
+    })
+    expect(screen.getByRole('status', {
+      name: '모니터링 데이터를 불러오는 중입니다.',
+    })).toBeTruthy()
+
+    await act(async () => {
+      collectors.resolve({ data: { items: [], errors: [] } } as never)
+    })
+    await act(async () => {
+      freshnessResult.resolve({ data: { items: [], errors: [] } } as never)
+    })
+    expect(screen.getByRole('status', {
+      name: '모니터링 데이터를 불러오는 중입니다.',
+    })).toBeTruthy()
+
+    await act(async () => {
+      runs.resolve({ data: { items: [], errors: [], total: 0 } } as never)
+    })
+    expect(await screen.findByRole('status', {
+      name: '표시할 모니터링 데이터가 없습니다.',
+    })).toBeTruthy()
   })
 
   it('모든 조회 결과가 비어 있으면 빈 결과 상태를 표시한다', async () => {
@@ -260,9 +322,43 @@ describe('MonitoringPage', () => {
         collector_id: 'fcdaum',
         started_from: '2026-08-31T15:00:00.000Z',
         started_to: '2026-09-08T14:59:59.999Z',
+        status: 'PARTIAL_FAILED',
         offset: 20,
         page_size: 20,
       },
+    })
+  })
+
+  it('상태 필터를 서버 페이지네이션 전에 적용해 뒤 페이지의 일치 실행을 찾는다', async () => {
+    window.history.replaceState(null, '', '/?status=FAILED')
+    const firstUnfilteredPage = Array.from({ length: 20 }, (_, index) => ({
+      ...successfulRun,
+      run_id: `run-success-${index}`,
+    }))
+    const request = vi.spyOn(apiClient, 'get').mockImplementation(
+      async (path, config) => {
+        const url = String(path)
+        const params = config?.params as Record<string, unknown> | undefined
+        if (url.endsWith('/freshness')) {
+          return { data: { items: freshness, errors: [] } } as never
+        }
+        if (url.endsWith('/runs')) {
+          return {
+            data:
+              params?.status === 'FAILED'
+                ? { items: [failedRun], errors: [], total: 1 }
+                : { items: firstUnfilteredPage, errors: [], total: 21 },
+          } as never
+        }
+        return { data: { items: [successfulRun], errors: [] } } as never
+      },
+    )
+    renderPage()
+
+    expect(await screen.findByText(failedRun.run_id)).toBeTruthy()
+    expect(screen.queryByText('run-success-0')).toBeNull()
+    expect(request).toHaveBeenCalledWith('/api/v1/monitoring/runs', {
+      params: expect.objectContaining({ status: 'FAILED', offset: 0 }),
     })
   })
 
@@ -297,11 +393,30 @@ describe('MonitoringPage', () => {
           collector_id: undefined,
           started_from: undefined,
           started_to: undefined,
+          status: undefined,
           offset: 20,
           page_size: 20,
         },
       })
     })
+  })
+
+  it('URL 페이지가 필터 결과의 마지막 페이지를 넘으면 URL과 offset을 안전하게 보정한다', async () => {
+    window.history.replaceState(null, '', '/?status=FAILED&page=5')
+    const request = mockApi({ runs: [failedRun], total: 20 })
+    renderPage()
+
+    await waitFor(() => {
+      expect(new URLSearchParams(window.location.search).get('page')).toBeNull()
+      expect(screen.getByText(/1\/1 페이지/)).toBeTruthy()
+    })
+
+    const runRequests = request.mock.calls.filter(
+      ([path]) => String(path).endsWith('/runs'),
+    )
+    expect(runRequests).toHaveLength(2)
+    expect(runRequests[0]?.[1]?.params).toMatchObject({ offset: 80 })
+    expect(runRequests[1]?.[1]?.params).toMatchObject({ offset: 0 })
   })
 
   it('서버 최대 offset 페이지에서는 전체 건수가 더 커도 다음 이동을 막는다', async () => {

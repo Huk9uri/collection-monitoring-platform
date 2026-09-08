@@ -119,7 +119,9 @@ def test_fcdaum_count_runs_uses_fixed_query_and_utc_parameters() -> None:
     started_to = datetime(2026, 9, 8, tzinfo=UTC)
 
     total = FcDaumAdapter(repository).count_runs(
-        started_from=started_from, started_to=started_to
+        started_from=started_from,
+        started_to=started_to,
+        status=MonitoringStatus.WARNING,
     )
 
     assert total == 7
@@ -131,9 +133,34 @@ def test_fcdaum_count_runs_uses_fixed_query_and_utc_parameters() -> None:
                 datetime(2026, 9, 1),
                 datetime(2026, 9, 8),
                 datetime(2026, 9, 8),
+                "WARNING",
+                "WARNING",
             ),
         )
     ]
+    assert "AND (? IS NULL OR CASE" in FCDAUM_COUNT_SQL
+    assert "dbo.FC_DAUM_COLLECTION_ATTEMPT" in FCDAUM_COUNT_SQL
+    assert "AttemptNo" in FCDAUM_COUNT_SQL
+
+
+def test_fcdaum_list_runs_filters_canonical_status_before_offset() -> None:
+    repository = FixtureRepository({FCDAUM_LIST_SQL: []})
+
+    FcDaumAdapter(repository).list_runs(
+        status=MonitoringStatus.PARTIAL_FAILED,
+        offset=20,
+        limit=20,
+    )
+
+    assert repository.calls == [
+        (
+            FCDAUM_LIST_SQL,
+            (None, None, None, None, "PARTIAL_FAILED", "PARTIAL_FAILED", 20, 20),
+        )
+    ]
+    assert FCDAUM_LIST_SQL.index("AND (? IS NULL OR CASE") < FCDAUM_LIST_SQL.index(
+        "OFFSET ? ROWS"
+    )
 
 
 def test_read_only_connection_and_repository_reject_write_statements() -> None:

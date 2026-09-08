@@ -6,10 +6,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from pydantic import BaseModel, Field
 
 from monitoring_api.adapters.base import CollectorRun, FreshnessRecord
 from monitoring_api.auth import require_role
-from monitoring_api.models import Role
+from monitoring_api.models import MonitoringStatus, Role
 from monitoring_api.services.monitoring import (
     MonitoringService,
     RunPageResult,
@@ -20,6 +21,22 @@ from monitoring_api.services.monitoring import (
 MAX_PAGE_SIZE = 100
 MAX_OFFSET = 10_000
 MAX_RUN_RANGE = timedelta(days=93)
+
+
+class RunQuery(BaseModel):
+    """실행 목록의 검증된 서버측 필터와 페이지 조건이다."""
+
+    collector_id: str | None = None
+    started_from: datetime | None = None
+    started_to: datetime | None = None
+    status: MonitoringStatus | None = None
+    offset: int = Field(
+        default=0,
+        ge=0,
+        le=MAX_OFFSET,
+        description="조회 시작 위치, 최대 10,000",
+    )
+    page_size: int = Field(default=50, ge=1, le=MAX_PAGE_SIZE)
 
 
 def get_monitoring_service(request: Request) -> MonitoringService:
@@ -105,25 +122,21 @@ def collectors(service: MonitoringServiceDependency) -> ServiceResult[CollectorR
 @router.get("/runs", response_model=RunPageResult)
 def runs(
     service: MonitoringServiceDependency,
-    collector_id: Annotated[str | None, Query()] = None,
-    started_from: Annotated[datetime | None, Query()] = None,
-    started_to: Annotated[datetime | None, Query()] = None,
-    offset: Annotated[
-        int,
-        Query(ge=0, le=MAX_OFFSET, description="조회 시작 위치, 최대 10,000"),
-    ] = 0,
-    page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 50,
+    query: Annotated[RunQuery, Query()],
 ) -> RunPageResult:
     """실행 이력을 제한된 기간과 페이지 크기로 조회한다."""
 
-    started_from, started_to = _resolve_run_range(started_from, started_to)
+    started_from, started_to = _resolve_run_range(
+        query.started_from, query.started_to
+    )
     try:
         return service.list_runs(
-            collector_id=collector_id,
+            collector_id=query.collector_id,
             started_from=started_from,
             started_to=started_to,
-            offset=offset,
-            limit=page_size,
+            status=query.status,
+            offset=query.offset,
+            limit=query.page_size,
         )
     except UnknownCollectorError as exc:
         raise _unknown_collector() from exc

@@ -111,6 +111,7 @@ def test_list_runs_converts_public_utc_filters_to_sql_datetime2_parameters() -> 
     HmrAdapter(repository).list_runs(
         started_from=started_from,
         started_to=started_to,
+        status=MonitoringStatus.PARTIAL_FAILED,
         offset=10,
         limit=25,
     )
@@ -123,6 +124,8 @@ def test_list_runs_converts_public_utc_filters_to_sql_datetime2_parameters() -> 
                 datetime(2026, 9, 1),
                 datetime(2026, 9, 8),
                 datetime(2026, 9, 8),
+                "PARTIAL_FAILED",
+                "PARTIAL_FAILED",
                 10,
                 25,
             ),
@@ -137,7 +140,9 @@ def test_hmr_count_runs_uses_fixed_query_and_utc_parameters() -> None:
     started_to = datetime(2026, 9, 8, tzinfo=UTC)
 
     total = HmrAdapter(repository).count_runs(
-        started_from=started_from, started_to=started_to
+        started_from=started_from,
+        started_to=started_to,
+        status=MonitoringStatus.WARNING,
     )
 
     assert total == 11
@@ -149,9 +154,17 @@ def test_hmr_count_runs_uses_fixed_query_and_utc_parameters() -> None:
                 datetime(2026, 9, 1),
                 datetime(2026, 9, 8),
                 datetime(2026, 9, 8),
+                "WARNING",
+                "WARNING",
             ),
         )
     ]
+    assert "WHEN 'PARTIAL' THEN 'PARTIAL_FAILED'" in HMR_COUNT_SQL
+    assert "dbo.CHANNEL_COLLECTION_ATTEMPT" in HMR_COUNT_SQL
+    assert "AttemptNo" in HMR_COUNT_SQL
+    assert HMR_LIST_SQL.index("AND (? IS NULL OR CASE") < HMR_LIST_SQL.index(
+        "OFFSET ? ROWS"
+    )
 
 
 @pytest.mark.parametrize(

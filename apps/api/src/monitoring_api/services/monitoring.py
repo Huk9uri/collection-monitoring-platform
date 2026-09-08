@@ -13,6 +13,7 @@ from monitoring_api.adapters.base import (
     CollectorRun,
     FreshnessRecord,
 )
+from monitoring_api.models import MonitoringStatus
 
 
 class UnknownCollectorError(LookupError):
@@ -95,6 +96,7 @@ class MonitoringService:
         collector_id: str | None = None,
         started_from: datetime | None = None,
         started_to: datetime | None = None,
+        status: MonitoringStatus | None = None,
         offset: int = 0,
         limit: int = 50,
     ) -> RunPageResult:
@@ -108,14 +110,17 @@ class MonitoringService:
         items: list[CollectorRun] = []
         errors: list[SourceError] = []
         total = 0
+        filter_conditions: dict[str, object] = {
+            "started_from": started_from,
+            "started_to": started_to,
+        }
+        if status is not None:
+            filter_conditions["status"] = status
         for adapter in adapters:
             try:
-                adapter_total = adapter.count_runs(
-                    started_from=started_from, started_to=started_to
-                )
+                adapter_total = adapter.count_runs(**filter_conditions)
                 adapter_items = adapter.list_runs(
-                    started_from=started_from,
-                    started_to=started_to,
+                    **filter_conditions,
                     offset=candidate_offset,
                     limit=candidate_limit,
                 )
