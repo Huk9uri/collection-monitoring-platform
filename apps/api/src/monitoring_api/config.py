@@ -1,15 +1,16 @@
 """모니터링 API의 환경 설정을 제공한다."""
 
 from functools import lru_cache
+from typing import Annotated
 
 from pydantic import field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """배포 환경에서 주입되는 API 설정이다."""
 
-    cors_origins: tuple[str, ...] = ()
+    cors_origins: Annotated[tuple[str, ...], NoDecode] = ()
 
     model_config = SettingsConfigDict(
         env_prefix="MONITORING_",

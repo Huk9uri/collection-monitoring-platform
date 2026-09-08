@@ -43,3 +43,33 @@ apps/api/.venv/Scripts/python.exe -m compileall -q apps/api/src apps/api/tests
 ## 우려사항
 
 - 현재 C: 드라이브의 여유 공간이 약 1.1GB여서 pytest 기본 캐시 쓰기는 `No space left on device`로 실패했다. 캐시 공급자를 비활성화한 동일 전체 테스트는 11개 모두 통과했다. 구현 코드와 테스트 결과에는 영향이 없지만 작업공간 용량 정리가 필요하다.
+
+## Fix round 1: 평문 CORS Origin 설정 파싱
+
+### 수정 내용
+
+- `cors_origins` 필드에 Pydantic Settings의 `NoDecode`를 적용해 환경변수와 `.env` 파일의 평문 쉼표 구분 Origin을 JSON으로 선행 해석하지 않도록 수정했다.
+- `.env.example`의 기존 평문 `MONITORING_CORS_ORIGINS=http://localhost:5173` 형식을 그대로 지원한다.
+- 실제 `.env.example` 파일을 읽는 설정 회귀 테스트와 실제 환경변수에서 `Settings()` 및 인자 없는 `create_app()`이 성공하는 회귀 테스트를 추가했다.
+
+### 테스트 및 결과
+
+```powershell
+# 회귀 대상 health 테스트
+apps/api/.venv/Scripts/python.exe -m pytest apps/api/tests/test_health.py -q -p no:cacheprovider
+# 결과: 5 passed
+
+# 전체 API 테스트
+apps/api/.venv/Scripts/python.exe -m pytest -q -p no:cacheprovider
+# 결과: 13 passed
+
+# 문법 검사
+apps/api/.venv/Scripts/python.exe -m compileall -q apps/api/src apps/api/tests
+# 결과: 성공
+```
+
+### 자체 검토
+
+- 회귀 테스트는 튜플 직접 주입이 아니라 실제 파일·환경변수 문자열을 Pydantic Settings에 전달한다.
+- `get_settings` 캐시를 테스트 전후에 비워 환경변수 변경이 인자 없는 `create_app()`에 반영되는지 확인한다.
+- `NoDecode`는 CORS Origin 필드에만 적용해 다른 복합 설정의 기본 Pydantic Settings 동작에는 영향을 주지 않는다.
