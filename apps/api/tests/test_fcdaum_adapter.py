@@ -5,8 +5,11 @@ import pytest
 from monitoring_api.adapters.base import MonitoringStatus
 from monitoring_api.adapters.fcdaum import (
     FCDAUM_ATTEMPTS_SQL,
+    FCDAUM_ATTEMPTS_FOR_RUNS_SQL,
     FCDAUM_FRESHNESS_SQL,
     FCDAUM_LATEST_SQL,
+    FCDAUM_LIST_SQL,
+    FCDAUM_RUN_SQL,
     FcDaumAdapter,
 )
 from monitoring_api.db import ReadOnlyRepository, ensure_read_only_connection_string
@@ -122,8 +125,141 @@ def test_read_only_connection_and_repository_reject_write_statements() -> None:
         repository.fetch_all("SELECT * INTO dbo.audit_copy FROM dbo.FC_DAUM_COLLECTION_RUN")
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT 1 SELECT 2",
+        "SELECT 1 GRANT SELECT TO monitor_user",
+        "SELECT 1 REVOKE SELECT FROM monitor_user",
+        "SELECT 1 DENY SELECT TO monitor_user",
+        "SELECT 1 DBCC CHECKDB",
+        "SELECT 1 BACKUP DATABASE monitoring TO DISK = 'backup.bak'",
+        "SELECT 1 RESTORE DATABASE monitoring FROM DISK = 'backup.bak'",
+        "SELECT 1 USE master",
+        "SELECT NEXT VALUE FOR dbo.monitoring_sequence",
+    ],
+)
+def test_read_only_repository_rejects_semicolonless_batches_and_admin_commands(
+    sql: str,
+) -> None:
+    connector_calls: list[str] = []
+    repository = ReadOnlyRepository(
+        "Driver={ODBC Driver 18 for SQL Server};Server=db",
+        connector=lambda connection_string: connector_calls.append(connection_string),
+    )
+
+    with pytest.raises(ValueError, match="SELECT"):
+        repository.fetch_all(sql)
+
+    assert connector_calls == []
+
+
+def test_connection_string_parser_preserves_braced_semicolon_values() -> None:
+    result = ensure_read_only_connection_string(
+        "Driver={ODBC Driver 18 for SQL Server};PWD={a;b};Server=db"
+    )
+
+    assert result == (
+        "Driver={ODBC Driver 18 for SQL Server};PWD={a;b};Server=db;"
+        "ApplicationIntent=ReadOnly"
+    )
+
+
+def test_connection_is_closed_when_cursor_creation_or_cursor_close_fails() -> None:
+    class CloseFailingCursor:
+        description = [("ready",)]
+
+        def execute(self, _: str) -> None:
+            return None
+
+        def fetchall(self) -> list[tuple[int]]:
+            return [(1,)]
+
+        def close(self) -> None:
+            raise RuntimeError("cursor close failed")
+
+    class Connection:
+        def __init__(self, *, cursor_fails: bool) -> None:
+            self.cursor_fails = cursor_fails
+            self.closed = False
+
+        def cursor(self) -> CloseFailingCursor:
+            if self.cursor_fails:
+                raise RuntimeError("cursor creation failed")
+            return CloseFailingCursor()
+
+        def close(self) -> None:
+            self.closed = True
+
+    for cursor_fails in (True, False):
+        connection = Connection(cursor_fails=cursor_fails)
+        repository = ReadOnlyRepository(
+            "Driver={ODBC Driver 18 for SQL Server};Server=db",
+            connector=lambda _: connection,
+        )
+
+        with pytest.raises(RuntimeError, match="cursor"):
+            repository.fetch_all("SELECT 1 AS ready")
+
+        assert connection.closed is True
+
+
 def test_conflicting_application_intent_is_rejected() -> None:
     with pytest.raises(ValueError, match="ReadOnly"):
         ensure_read_only_connection_string(
             "Driver={ODBC Driver 18 for SQL Server};ApplicationIntent=ReadWrite"
         )
+
+
+def test_fcdaum_list_runs_loads_all_attempts_in_one_bulk_query() -> None:
+    first = _run_row()
+    second = {**_run_row(), "run_id": "run-2"}
+    repository = FixtureRepository(
+        {
+            FCDAUM_LIST_SQL: [first, second],
+            FCDAUM_ATTEMPTS_FOR_RUNS_SQL: [
+                {
+                    **_attempt(
+                        1,
+                        "SUCCESS",
+                        source_count=1,
+                        inserted_count=1,
+                        committed=True,
+                    ),
+                    "run_id": "run-1",
+                },
+                {
+                    **_attempt(
+                        1,
+                        "SUCCESS_EMPTY",
+                        source_count=0,
+                        inserted_count=0,
+                        committed=True,
+                    ),
+                    "run_id": "run-2",
+                },
+            ],
+        }
+    )
+
+    runs = FcDaumAdapter(repository).list_runs(limit=2)
+
+    assert [run.run_id for run in runs] == ["run-1", "run-2"]
+    assert [len(run.attempts) for run in runs] == [1, 1]
+    assert [call[0] for call in repository.calls] == [
+        FCDAUM_LIST_SQL,
+        FCDAUM_ATTEMPTS_FOR_RUNS_SQL,
+    ]
+    assert repository.calls[1][1] == ('["run-1", "run-2"]',)
+
+
+def test_all_fcdaum_fixed_queries_pass_the_read_only_validator() -> None:
+    for sql in (
+        FCDAUM_LATEST_SQL,
+        FCDAUM_LIST_SQL,
+        FCDAUM_RUN_SQL,
+        FCDAUM_ATTEMPTS_SQL,
+        FCDAUM_ATTEMPTS_FOR_RUNS_SQL,
+        FCDAUM_FRESHNESS_SQL,
+    ):
+        ReadOnlyRepository._validate_select(sql)

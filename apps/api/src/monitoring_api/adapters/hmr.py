@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from collections import defaultdict
 from datetime import datetime
 from typing import Protocol
 
@@ -70,6 +72,27 @@ FROM dbo.CHANNEL_COLLECTION_ATTEMPT
 WHERE RunId = ?
 ORDER BY ChannelName, AttemptNo"""
 
+HMR_ATTEMPTS_FOR_RUNS_SQL = """SELECT
+    RunId AS run_id,
+    ChannelName AS unit_id,
+    ChannelName AS unit_name,
+    AttemptNo AS attempt_no,
+    StartedAt AS started_at,
+    FinishedAt AS completed_at,
+    AttemptStatus AS raw_status,
+    RecordsCount AS source_count,
+    InsertedCount AS inserted_count,
+    ChangedCount AS changed_count,
+    SkippedCount AS unchanged_count,
+    CASE WHEN AttemptStatus IN ('SUCCESS', 'SUCCESS_EMPTY') THEN CAST(1 AS bit)
+         ELSE CAST(0 AS bit) END AS committed,
+    ErrorCategory AS error_category
+FROM dbo.CHANNEL_COLLECTION_ATTEMPT
+WHERE RunId IN (
+    SELECT TRY_CONVERT(uniqueidentifier, [value]) FROM OPENJSON(?)
+)
+ORDER BY RunId, ChannelName, AttemptNo"""
+
 HMR_FRESHNESS_SQL = """SELECT dataset_id, latest_at
 FROM (
     SELECT 1 AS sequence, 'naver' AS dataset_id, MAX(CollectedAt) AS latest_at
@@ -129,7 +152,26 @@ class HmrAdapter:
                 limit,
             ),
         )
-        return self._runs(rows)
+        if not rows:
+            return []
+        run_ids = [str(row["run_id"]) for row in rows]
+        attempt_rows = self._repository.fetch_all(
+            HMR_ATTEMPTS_FOR_RUNS_SQL,
+            (json.dumps(run_ids),),
+        )
+        attempts_by_run: dict[str, list[CollectorAttempt]] = defaultdict(list)
+        for attempt_row in attempt_rows:
+            attempts_by_run[str(attempt_row["run_id"])].append(
+                attempt_from_row(attempt_row)
+            )
+        return [
+            run_from_row(
+                self.collector_id,
+                row,
+                attempts_by_run.get(str(row["run_id"]), []),
+            )
+            for row in rows
+        ]
 
     def get_run(self, run_id: str) -> CollectorRun | None:
         runs = self._runs(self._repository.fetch_all(HMR_RUN_SQL, (run_id,)))

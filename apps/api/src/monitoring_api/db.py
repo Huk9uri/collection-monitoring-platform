@@ -2,15 +2,169 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable
 from typing import Any
 
 
-_WRITE_KEYWORDS = re.compile(
-    r"\b(?:INTO|INSERT|UPDATE|DELETE|MERGE|EXEC(?:UTE)?|DROP|ALTER|CREATE|TRUNCATE)\b",
-    re.IGNORECASE,
-)
+_FORBIDDEN_READ_QUERY_KEYWORDS = {
+    "ALTER",
+    "BACKUP",
+    "BEGIN",
+    "BULK",
+    "CHECKPOINT",
+    "COMMIT",
+    "CREATE",
+    "DBCC",
+    "DECLARE",
+    "DELETE",
+    "DENY",
+    "DISABLE",
+    "DROP",
+    "ENABLE",
+    "EXEC",
+    "EXECUTE",
+    "GOTO",
+    "GRANT",
+    "INSERT",
+    "INTO",
+    "KILL",
+    "MERGE",
+    "OPENROWSET",
+    "PRINT",
+    "RAISERROR",
+    "RECONFIGURE",
+    "RESTORE",
+    "REVOKE",
+    "ROLLBACK",
+    "SAVE",
+    "SET",
+    "SHUTDOWN",
+    "THROW",
+    "TRAN",
+    "TRUNCATE",
+    "UPDATE",
+    "USE",
+    "WAITFOR",
+    "WHILE",
+}
+
+
+def _split_odbc_parts(connection_string: str) -> list[str]:
+    """중괄호 값 내부의 세미콜론을 보존해 ODBC 속성을 분리한다."""
+
+    parts: list[str] = []
+    current: list[str] = []
+    in_braces = False
+    index = 0
+    while index < len(connection_string):
+        character = connection_string[index]
+        if character == "{" and not in_braces:
+            in_braces = True
+            current.append(character)
+        elif character == "}" and in_braces:
+            if (
+                index + 1 < len(connection_string)
+                and connection_string[index + 1] == "}"
+            ):
+                current.extend((character, character))
+                index += 1
+            else:
+                in_braces = False
+                current.append(character)
+        elif character == "}" and not in_braces:
+            raise ValueError("DB 연결 문자열의 중괄호 형식이 올바르지 않습니다.")
+        elif character == ";" and not in_braces:
+            if part := "".join(current).strip():
+                parts.append(part)
+            current = []
+        else:
+            current.append(character)
+        index += 1
+    if in_braces:
+        raise ValueError("DB 연결 문자열의 중괄호 형식이 올바르지 않습니다.")
+    if part := "".join(current).strip():
+        parts.append(part)
+    return parts
+
+
+def _sql_tokens(sql: str) -> list[tuple[str, int]]:
+    """문자열·주석·quoted identifier를 제외한 T-SQL 토큰과 깊이를 반환한다."""
+
+    tokens: list[tuple[str, int]] = []
+    depth = 0
+    index = 0
+    while index < len(sql):
+        character = sql[index]
+        next_character = sql[index + 1] if index + 1 < len(sql) else ""
+        if character.isspace():
+            index += 1
+            continue
+        if character == "-" and next_character == "-":
+            newline = sql.find("\n", index + 2)
+            index = len(sql) if newline < 0 else newline + 1
+            continue
+        if character == "/" and next_character == "*":
+            closing = sql.find("*/", index + 2)
+            if closing < 0:
+                raise ValueError("SQL 블록 주석이 닫히지 않았습니다.")
+            index = closing + 2
+            continue
+        if character in {"'", '"'}:
+            quote = character
+            index += 1
+            while index < len(sql):
+                if sql[index] == quote:
+                    if index + 1 < len(sql) and sql[index + 1] == quote:
+                        index += 2
+                        continue
+                    index += 1
+                    break
+                index += 1
+            else:
+                raise ValueError("SQL 문자열이 닫히지 않았습니다.")
+            continue
+        if character == "[":
+            index += 1
+            while index < len(sql):
+                if sql[index] == "]":
+                    if index + 1 < len(sql) and sql[index + 1] == "]":
+                        index += 2
+                        continue
+                    index += 1
+                    break
+                index += 1
+            else:
+                raise ValueError("SQL 식별자가 닫히지 않았습니다.")
+            continue
+        if character == "(":
+            tokens.append((character, depth))
+            depth += 1
+            index += 1
+            continue
+        if character == ")":
+            depth -= 1
+            if depth < 0:
+                raise ValueError("SQL 괄호 형식이 올바르지 않습니다.")
+            tokens.append((character, depth))
+            index += 1
+            continue
+        if character == ";":
+            tokens.append((character, depth))
+            index += 1
+            continue
+        if character.isalpha() or character in {"_", "@", "#"}:
+            end = index + 1
+            while end < len(sql) and (
+                sql[end].isalnum() or sql[end] in {"_", "@", "#", "$"}
+            ):
+                end += 1
+            tokens.append((sql[index:end].upper(), depth))
+            index = end
+            continue
+        index += 1
+    if depth != 0:
+        raise ValueError("SQL 괄호 형식이 올바르지 않습니다.")
+    return tokens
 
 
 def ensure_read_only_connection_string(connection_string: str) -> str:
@@ -19,11 +173,7 @@ def ensure_read_only_connection_string(connection_string: str) -> str:
     if not connection_string.strip():
         raise ValueError("DB 연결 문자열이 비어 있습니다.")
 
-    parts = [
-        part.strip()
-        for part in connection_string.strip().strip(";").split(";")
-        if part.strip()
-    ]
+    parts = _split_odbc_parts(connection_string.strip().strip(";"))
     intent_indexes: list[int] = []
     for index, part in enumerate(parts):
         key, separator, value = part.partition("=")
@@ -52,7 +202,11 @@ def _default_connector(connection_string: str) -> Any:
 
 
 class ReadOnlyRepository:
-    """고정된 단일 SELECT 문만 실행하고 연결을 즉시 닫는다."""
+    """고정된 단일 SELECT 문만 실행하고 연결을 즉시 닫는다.
+
+    이 검사는 실수와 명백한 배치를 차단하는 방어 계층이다. 최종 보안 경계는
+    데이터 소스마다 DML·DDL 권한이 없는 SELECT 전용 DB principal이어야 한다.
+    """
 
     def __init__(
         self,
@@ -65,12 +219,31 @@ class ReadOnlyRepository:
 
     @staticmethod
     def _validate_select(sql: str) -> None:
-        statement = sql.strip()
-        if not statement.upper().startswith("SELECT"):
+        tokens = _sql_tokens(sql.strip())
+        if not tokens or tokens[0] != ("SELECT", 0):
             raise ValueError("읽기 전용 저장소는 SELECT 문만 허용합니다.")
-        without_trailing_separator = statement[:-1] if statement.endswith(";") else statement
-        if ";" in without_trailing_separator or _WRITE_KEYWORDS.search(statement):
+        semicolon_indexes = [
+            index for index, token in enumerate(tokens) if token[0] == ";"
+        ]
+        if semicolon_indexes and semicolon_indexes != [len(tokens) - 1]:
             raise ValueError("읽기 전용 저장소는 단일 SELECT 문만 허용합니다.")
+        words = [token for token, _ in tokens]
+        if _FORBIDDEN_READ_QUERY_KEYWORDS.intersection(words):
+            raise ValueError("읽기 전용 저장소는 단일 SELECT 문만 허용합니다.")
+        if any(
+            words[index : index + 3] == ["NEXT", "VALUE", "FOR"]
+            for index in range(len(words) - 2)
+        ):
+            raise ValueError("읽기 전용 저장소는 단일 SELECT 문만 허용합니다.")
+        for index, (token, depth) in enumerate(tokens[1:], start=1):
+            if token != "SELECT" or depth != 0:
+                continue
+            previous = tokens[index - 1][0]
+            before_previous = tokens[index - 2][0] if index > 1 else None
+            if previous != "UNION" and not (
+                previous == "ALL" and before_previous == "UNION"
+            ):
+                raise ValueError("읽기 전용 저장소는 단일 SELECT 문만 허용합니다.")
 
     def fetch_all(
         self, sql: str, parameters: tuple[object, ...] = ()
@@ -79,16 +252,21 @@ class ReadOnlyRepository:
 
         self._validate_select(sql)
         connection = self._connector(self._connection_string)
-        cursor = connection.cursor()
         try:
-            if parameters:
-                cursor.execute(sql, parameters)
-            else:
-                cursor.execute(sql)
-            columns = [str(description[0]).casefold() for description in cursor.description]
-            return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+            cursor = connection.cursor()
+            try:
+                if parameters:
+                    cursor.execute(sql, parameters)
+                else:
+                    cursor.execute(sql)
+                columns = [
+                    str(description[0]).casefold()
+                    for description in cursor.description
+                ]
+                return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+            finally:
+                cursor.close()
         finally:
-            cursor.close()
             connection.close()
 
     def ping(self) -> bool:

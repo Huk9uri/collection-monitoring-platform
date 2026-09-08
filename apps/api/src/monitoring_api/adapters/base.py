@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
 from collections.abc import Mapping
+from datetime import UTC, date, datetime, timedelta
 from typing import Protocol
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from monitoring_api.models import MonitoringStatus
 
@@ -27,6 +27,11 @@ class CollectorAttempt(BaseModel):
     committed: bool | None = None
     error_category: str | None = None
 
+    @field_validator("started_at", "completed_at")
+    @classmethod
+    def require_utc(cls, value: datetime | None) -> datetime | None:
+        return require_utc_datetime(value)
+
 
 class CollectorRun(BaseModel):
     """수집기별 스키마 차이를 제거한 실행 정보다."""
@@ -45,6 +50,11 @@ class CollectorRun(BaseModel):
     unchanged_count: int
     attempts: list[CollectorAttempt] = Field(default_factory=list)
 
+    @field_validator("started_at", "completed_at")
+    @classmethod
+    def require_utc(cls, value: datetime | None) -> datetime | None:
+        return require_utc_datetime(value)
+
 
 class FreshnessRecord(BaseModel):
     """고정 업무 데이터셋의 최근 적재 시각이다."""
@@ -52,6 +62,11 @@ class FreshnessRecord(BaseModel):
     collector_id: str
     dataset_id: str
     latest_at: datetime | None
+
+    @field_validator("latest_at")
+    @classmethod
+    def require_utc(cls, value: datetime | None) -> datetime | None:
+        return require_utc_datetime(value)
 
 
 class CollectorAdapter(Protocol):
@@ -78,6 +93,16 @@ class CollectorAdapter(Protocol):
     def readiness(self) -> bool: ...
 
 
+def require_utc_datetime(value: datetime | None) -> datetime | None:
+    """공개 모델과 조회 필터가 UTC-aware 시각만 사용하도록 검증한다."""
+
+    if value is None:
+        return None
+    if value.utcoffset() != timedelta(0):
+        raise ValueError("시각은 UTC-aware 값이어야 합니다.")
+    return value.astimezone(UTC)
+
+
 def as_utc(value: datetime | None) -> datetime | None:
     """UTC로 저장된 SQL Server datetime2를 공개 UTC 시각으로 변환한다."""
 
@@ -85,7 +110,7 @@ def as_utc(value: datetime | None) -> datetime | None:
         return None
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
+    return require_utc_datetime(value)
 
 
 def to_sql_datetime(value: datetime | None) -> datetime | None:
@@ -93,9 +118,9 @@ def to_sql_datetime(value: datetime | None) -> datetime | None:
 
     if value is None:
         return None
-    if value.tzinfo is None:
-        return value
-    return value.astimezone(UTC).replace(tzinfo=None)
+    validated = require_utc_datetime(value)
+    assert validated is not None
+    return validated.replace(tzinfo=None)
 
 
 def map_raw_status(raw_status: str) -> MonitoringStatus:
@@ -156,7 +181,9 @@ def derive_run_status(
     if success_count < len(selected):
         return MonitoringStatus.PARTIAL_FAILED
 
-    retried = len(attempts) > len(selected) or any(attempt.attempt_no > 1 for attempt in selected)
+    retried = len(attempts) > len(selected) or any(
+        attempt.attempt_no > 1 for attempt in selected
+    )
     had_failed_attempt = any(not _attempt_succeeded(attempt) for attempt in attempts)
     if retried or had_failed_attempt:
         return MonitoringStatus.WARNING
