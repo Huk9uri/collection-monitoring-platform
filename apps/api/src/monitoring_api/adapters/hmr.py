@@ -49,6 +49,13 @@ _HMR_RAW_STATUS_SQL = """CASE UPPER(LTRIM(RTRIM(runs.RunStatus)))
     WHEN 'NOT_RUN' THEN 'NOT_RUN'
     ELSE 'FAILED' END"""
 
+_HMR_NORMALIZED_ATTEMPT_STATUS_SQL = (
+    "COALESCE(UPPER(LTRIM(RTRIM(attempt.AttemptStatus))), '')"
+)
+_HMR_NORMALIZED_SELECTED_ATTEMPT_STATUS_SQL = (
+    "COALESCE(UPPER(LTRIM(RTRIM(AttemptStatus))), '')"
+)
+
 _HMR_CANONICAL_STATUS_SQL = f"""CASE
     WHEN {_HMR_RAW_STATUS_SQL} IN ('RUNNING', 'ABORTED', 'NOT_RUN')
         THEN {_HMR_RAW_STATUS_SQL}
@@ -65,7 +72,7 @@ _HMR_CANONICAL_STATUS_SQL = f"""CASE
               WHERE latest.RunId = attempt.RunId
                 AND latest.ChannelName = attempt.ChannelName
           )
-          AND COALESCE(UPPER(LTRIM(RTRIM(attempt.AttemptStatus))), '')
+          AND {_HMR_NORMALIZED_ATTEMPT_STATUS_SQL}
               IN ('SUCCESS', 'SUCCESS_EMPTY')
     ) THEN 'FAILED'
     WHEN EXISTS (
@@ -77,7 +84,7 @@ _HMR_CANONICAL_STATUS_SQL = f"""CASE
               WHERE latest.RunId = attempt.RunId
                 AND latest.ChannelName = attempt.ChannelName
           )
-          AND COALESCE(UPPER(LTRIM(RTRIM(attempt.AttemptStatus))), '')
+          AND {_HMR_NORMALIZED_ATTEMPT_STATUS_SQL}
               NOT IN ('SUCCESS', 'SUCCESS_EMPTY')
     ) THEN 'PARTIAL_FAILED'
     WHEN EXISTS (
@@ -85,7 +92,7 @@ _HMR_CANONICAL_STATUS_SQL = f"""CASE
         WHERE attempt.RunId = runs.RunId
           AND (
               attempt.AttemptNo > 1
-              OR COALESCE(UPPER(LTRIM(RTRIM(attempt.AttemptStatus))), '')
+              OR {_HMR_NORMALIZED_ATTEMPT_STATUS_SQL}
                   NOT IN ('SUCCESS', 'SUCCESS_EMPTY')
           )
     ) THEN 'WARNING'
@@ -127,7 +134,7 @@ HMR_RUN_SQL = f"""SELECT
 FROM dbo.CHANNEL_COLLECTION_RUN
 WHERE RunId = ?"""
 
-HMR_ATTEMPTS_SQL = """SELECT
+HMR_ATTEMPTS_SQL = f"""SELECT
     ChannelName AS unit_id,
     ChannelName AS unit_name,
     AttemptNo AS attempt_no,
@@ -138,14 +145,15 @@ HMR_ATTEMPTS_SQL = """SELECT
     InsertedCount AS inserted_count,
     ChangedCount AS changed_count,
     SkippedCount AS unchanged_count,
-    CASE WHEN AttemptStatus IN ('SUCCESS', 'SUCCESS_EMPTY') THEN CAST(1 AS bit)
+    CASE WHEN {_HMR_NORMALIZED_SELECTED_ATTEMPT_STATUS_SQL}
+              IN ('SUCCESS', 'SUCCESS_EMPTY') THEN CAST(1 AS bit)
          ELSE CAST(0 AS bit) END AS committed,
     ErrorCategory AS error_category
 FROM dbo.CHANNEL_COLLECTION_ATTEMPT
 WHERE RunId = ?
 ORDER BY ChannelName, AttemptNo"""
 
-HMR_ATTEMPTS_FOR_RUNS_SQL = """SELECT
+HMR_ATTEMPTS_FOR_RUNS_SQL = f"""SELECT
     RunId AS run_id,
     ChannelName AS unit_id,
     ChannelName AS unit_name,
@@ -157,7 +165,8 @@ HMR_ATTEMPTS_FOR_RUNS_SQL = """SELECT
     InsertedCount AS inserted_count,
     ChangedCount AS changed_count,
     SkippedCount AS unchanged_count,
-    CASE WHEN AttemptStatus IN ('SUCCESS', 'SUCCESS_EMPTY') THEN CAST(1 AS bit)
+    CASE WHEN {_HMR_NORMALIZED_SELECTED_ATTEMPT_STATUS_SQL}
+              IN ('SUCCESS', 'SUCCESS_EMPTY') THEN CAST(1 AS bit)
          ELSE CAST(0 AS bit) END AS committed,
     ErrorCategory AS error_category
 FROM dbo.CHANNEL_COLLECTION_ATTEMPT

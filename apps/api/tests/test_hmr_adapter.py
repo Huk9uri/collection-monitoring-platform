@@ -60,6 +60,68 @@ def test_hmr_partial_status_maps_to_partial_failed() -> None:
     assert run.status is MonitoringStatus.PARTIAL_FAILED
 
 
+@pytest.mark.parametrize(
+    ("raw_status", "committed", "source_count", "expected"),
+    [
+        (" success ", True, 1, MonitoringStatus.SUCCESS),
+        (" SuCcEsS_EmPtY ", True, 0, MonitoringStatus.SUCCESS_EMPTY),
+        (" success ", False, 1, MonitoringStatus.FAILED),
+    ],
+)
+def test_hmr_attempt_status_normalization_matches_filter_and_committed_sql(
+    raw_status: str,
+    committed: bool,
+    source_count: int,
+    expected: MonitoringStatus,
+) -> None:
+    repository = FixtureRepository(
+        {
+            HMR_LATEST_SQL: [
+                {
+                    "run_id": "run-normalized",
+                    "scheduled_date": date(2026, 9, 8),
+                    "started_at": datetime(2026, 9, 8, 5),
+                    "completed_at": datetime(2026, 9, 8, 5, 3),
+                    "raw_status": "SUCCESS",
+                    "successful_units": 1,
+                    "failed_units": 0,
+                }
+            ],
+            HMR_ATTEMPTS_SQL: [
+                {
+                    "unit_id": "naver",
+                    "unit_name": "naver",
+                    "attempt_no": 1,
+                    "started_at": datetime(2026, 9, 8, 5),
+                    "completed_at": datetime(2026, 9, 8, 5, 1),
+                    "raw_status": raw_status,
+                    "source_count": source_count,
+                    "inserted_count": source_count,
+                    "changed_count": 0,
+                    "unchanged_count": 0,
+                    "committed": committed,
+                    "error_category": None,
+                }
+            ],
+        }
+    )
+
+    run = HmrAdapter(repository).latest()
+
+    assert run is not None
+    assert run.status is expected
+    normalized_filter_sql = (
+        "COALESCE(UPPER(LTRIM(RTRIM(attempt.AttemptStatus))), '')"
+    )
+    normalized_committed_sql = (
+        "COALESCE(UPPER(LTRIM(RTRIM(AttemptStatus))), '')"
+    )
+    assert normalized_filter_sql in HMR_LIST_SQL
+    assert normalized_filter_sql in HMR_COUNT_SQL
+    assert normalized_committed_sql in HMR_ATTEMPTS_SQL
+    assert normalized_committed_sql in HMR_ATTEMPTS_FOR_RUNS_SQL
+
+
 def _attempt(unit_id: str, status: str, source_count: int = 1) -> CollectorAttempt:
     return CollectorAttempt(
         unit_id=unit_id,

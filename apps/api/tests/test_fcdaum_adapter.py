@@ -91,6 +91,46 @@ def test_fcdaum_retry_success_is_warning_and_all_attempts_are_preserved() -> Non
     assert repository.calls[-1] == (FCDAUM_ATTEMPTS_SQL, ("run-1",))
 
 
+@pytest.mark.parametrize(
+    ("raw_status", "committed", "source_count", "expected"),
+    [
+        (" success ", True, 1, MonitoringStatus.SUCCESS),
+        (" SuCcEsS_EmPtY ", True, 0, MonitoringStatus.SUCCESS_EMPTY),
+        (" success ", False, 1, MonitoringStatus.FAILED),
+    ],
+)
+def test_fcdaum_attempt_status_normalization_matches_canonical_sql_filter(
+    raw_status: str,
+    committed: bool,
+    source_count: int,
+    expected: MonitoringStatus,
+) -> None:
+    repository = FixtureRepository(
+        {
+            FCDAUM_LATEST_SQL: [_run_row()],
+            FCDAUM_ATTEMPTS_SQL: [
+                _attempt(
+                    1,
+                    raw_status,
+                    source_count=source_count,
+                    inserted_count=source_count,
+                    committed=committed,
+                )
+            ],
+        }
+    )
+
+    run = FcDaumAdapter(repository).latest()
+
+    assert run is not None
+    assert run.status is expected
+    normalized_sql = (
+        "COALESCE(UPPER(LTRIM(RTRIM(attempt.AttemptStatus))), '')"
+    )
+    assert normalized_sql in FCDAUM_LIST_SQL
+    assert normalized_sql in FCDAUM_COUNT_SQL
+
+
 def test_fcdaum_freshness_uses_only_the_three_fixed_business_tables() -> None:
     timestamp = datetime(2026, 9, 8, 2)
     repository = FixtureRepository(

@@ -132,10 +132,16 @@ def to_sql_datetime(value: datetime | None) -> datetime | None:
     return validated.replace(tzinfo=None)
 
 
+def normalize_raw_status(raw_status: str) -> str:
+    """Python과 고정 SQL이 공유하는 상태 토큰 정규화 의미다."""
+
+    return raw_status.strip().upper()
+
+
 def map_raw_status(raw_status: str) -> MonitoringStatus:
     """수집기 원시 실행 상태를 공개 상태로 변환한다."""
 
-    normalized = raw_status.strip().upper()
+    normalized = normalize_raw_status(raw_status)
     mappings = {
         "SUCCESS": MonitoringStatus.SUCCESS,
         "SUCCESS_EMPTY": MonitoringStatus.SUCCESS_EMPTY,
@@ -163,7 +169,7 @@ def final_attempts(attempts: list[CollectorAttempt]) -> list[CollectorAttempt]:
 
 def _attempt_succeeded(attempt: CollectorAttempt) -> bool:
     return (
-        attempt.raw_status.upper() in {"SUCCESS", "SUCCESS_EMPTY"}
+        normalize_raw_status(attempt.raw_status) in {"SUCCESS", "SUCCESS_EMPTY"}
         and attempt.committed is not False
     )
 

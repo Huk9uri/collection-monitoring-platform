@@ -49,6 +49,10 @@ _FCDAUM_RAW_STATUS_SQL = """CASE UPPER(LTRIM(RTRIM(runs.RunStatus)))
     WHEN 'NOT_RUN' THEN 'NOT_RUN'
     ELSE 'FAILED' END"""
 
+_FCDAUM_NORMALIZED_ATTEMPT_STATUS_SQL = (
+    "COALESCE(UPPER(LTRIM(RTRIM(attempt.AttemptStatus))), '')"
+)
+
 _FCDAUM_CANONICAL_STATUS_SQL = f"""CASE
     WHEN {_FCDAUM_RAW_STATUS_SQL} IN ('RUNNING', 'ABORTED', 'NOT_RUN')
         THEN {_FCDAUM_RAW_STATUS_SQL}
@@ -65,7 +69,7 @@ _FCDAUM_CANONICAL_STATUS_SQL = f"""CASE
               WHERE latest.RunId = attempt.RunId
                 AND latest.BrandCode = attempt.BrandCode
           )
-          AND COALESCE(UPPER(LTRIM(RTRIM(attempt.AttemptStatus))), '')
+          AND {_FCDAUM_NORMALIZED_ATTEMPT_STATUS_SQL}
               IN ('SUCCESS', 'SUCCESS_EMPTY')
           AND ISNULL(attempt.DbCommitted, 1) <> 0
     ) THEN 'FAILED'
@@ -79,7 +83,7 @@ _FCDAUM_CANONICAL_STATUS_SQL = f"""CASE
                 AND latest.BrandCode = attempt.BrandCode
           )
           AND NOT (
-              COALESCE(UPPER(LTRIM(RTRIM(attempt.AttemptStatus))), '')
+              {_FCDAUM_NORMALIZED_ATTEMPT_STATUS_SQL}
                   IN ('SUCCESS', 'SUCCESS_EMPTY')
               AND ISNULL(attempt.DbCommitted, 1) <> 0
           )
@@ -90,7 +94,7 @@ _FCDAUM_CANONICAL_STATUS_SQL = f"""CASE
           AND (
               attempt.AttemptNo > 1
               OR NOT (
-                  COALESCE(UPPER(LTRIM(RTRIM(attempt.AttemptStatus))), '')
+                  {_FCDAUM_NORMALIZED_ATTEMPT_STATUS_SQL}
                       IN ('SUCCESS', 'SUCCESS_EMPTY')
                   AND ISNULL(attempt.DbCommitted, 1) <> 0
               )
