@@ -33,6 +33,14 @@ class ServiceResult(BaseModel, Generic[T]):
     errors: list[SourceError]
 
 
+class RunPageResult(BaseModel):
+    """필터 전체 건수와 현재 전역 페이지를 함께 반환한다."""
+
+    items: list[CollectorRun]
+    errors: list[SourceError]
+    total: int
+
+
 class CollectorReadiness(BaseModel):
     collector_id: str
     ready: bool
@@ -89,15 +97,46 @@ class MonitoringService:
         started_to: datetime | None = None,
         offset: int = 0,
         limit: int = 50,
-    ) -> ServiceResult[CollectorRun]:
-        return self._collect_many(
-            lambda adapter: adapter.list_runs(
-                started_from=started_from,
-                started_to=started_to,
-                offset=offset,
-                limit=limit,
-            ),
-            collector_id=collector_id,
+    ) -> RunPageResult:
+        adapters = (
+            [self._registered(collector_id)]
+            if collector_id is not None
+            else list(self._adapters.values())
+        )
+        candidate_offset = offset if collector_id is not None else 0
+        candidate_limit = limit if collector_id is not None else offset + limit
+        items: list[CollectorRun] = []
+        errors: list[SourceError] = []
+        total = 0
+        for adapter in adapters:
+            try:
+                adapter_total = adapter.count_runs(
+                    started_from=started_from, started_to=started_to
+                )
+                adapter_items = adapter.list_runs(
+                    started_from=started_from,
+                    started_to=started_to,
+                    offset=candidate_offset,
+                    limit=candidate_limit,
+                )
+            except Exception:
+                errors.append(SourceError(collector_id=adapter.collector_id))
+                continue
+            total += adapter_total
+            items.extend(adapter_items)
+
+        if collector_id is not None:
+            return RunPageResult(items=items, errors=errors, total=total)
+
+        ordered = sorted(
+            items,
+            key=lambda run: (run.started_at, run.collector_id, run.run_id),
+            reverse=True,
+        )
+        return RunPageResult(
+            items=ordered[offset : offset + limit],
+            errors=errors,
+            total=total,
         )
 
     def get_run(self, collector_id: str, run_id: str) -> ServiceResult[CollectorRun]:

@@ -49,6 +49,11 @@ WHERE (? IS NULL OR StartedAt >= ?)
 ORDER BY StartedAt DESC
 OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"""
 
+HMR_COUNT_SQL = """SELECT COUNT_BIG(*) AS total
+FROM dbo.CHANNEL_COLLECTION_RUN
+WHERE (? IS NULL OR StartedAt >= ?)
+  AND (? IS NULL OR StartedAt <= ?)"""
+
 HMR_RUN_SQL = f"""SELECT
 {_HMR_RUN_COLUMNS}
 FROM dbo.CHANNEL_COLLECTION_RUN
@@ -172,6 +177,23 @@ class HmrAdapter:
             )
             for row in rows
         ]
+
+    def count_runs(
+        self,
+        *,
+        started_from: datetime | None = None,
+        started_to: datetime | None = None,
+    ) -> int:
+        rows = self._repository.fetch_all(
+            HMR_COUNT_SQL,
+            (
+                to_sql_datetime(started_from),
+                to_sql_datetime(started_from),
+                to_sql_datetime(started_to),
+                to_sql_datetime(started_to),
+            ),
+        )
+        return int(rows[0]["total"]) if rows else 0
 
     def get_run(self, run_id: str) -> CollectorRun | None:
         runs = self._runs(self._repository.fetch_all(HMR_RUN_SQL, (run_id,)))

@@ -86,6 +86,13 @@ class CollectorAdapter(Protocol):
         limit: int = 50,
     ) -> list[CollectorRun]: ...
 
+    def count_runs(
+        self,
+        *,
+        started_from: datetime | None = None,
+        started_to: datetime | None = None,
+    ) -> int: ...
+
     def get_run(self, run_id: str) -> CollectorRun | None: ...
 
     def freshness(self) -> list[FreshnessRecord]: ...

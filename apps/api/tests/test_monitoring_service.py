@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -35,6 +35,9 @@ class AvailableAdapter:
         latest = self.latest()
         return [latest] if latest is not None else []
 
+    def count_runs(self, **_: object) -> int:
+        return 1
+
     def get_run(self, run_id: str) -> CollectorRun | None:
         return self.latest() if run_id == "run-ok" else None
 
@@ -57,6 +60,43 @@ class UnavailableAdapter(AvailableAdapter):
 
     def latest(self) -> CollectorRun | None:
         raise RuntimeError("Server=db;Password=secret; SELECT * FROM private")
+
+
+class PagedAdapter(AvailableAdapter):
+    def __init__(self, collector_id: str, runs: list[CollectorRun]) -> None:
+        self.collector_id = collector_id
+        self.display_name = collector_id
+        self.runs = runs
+        self.list_calls: list[dict[str, object]] = []
+        self.count_calls: list[dict[str, object]] = []
+
+    def list_runs(self, **conditions: object) -> list[CollectorRun]:
+        self.list_calls.append(conditions)
+        offset = int(conditions["offset"])
+        limit = int(conditions["limit"])
+        return self.runs[offset : offset + limit]
+
+    def count_runs(self, **conditions: object) -> int:
+        self.count_calls.append(conditions)
+        return len(self.runs)
+
+
+def make_run(collector_id: str, run_id: str, minute: int) -> CollectorRun:
+    started_at = datetime(2026, 9, 8, 1, tzinfo=UTC) - timedelta(minutes=minute)
+    return CollectorRun(
+        collector_id=collector_id,
+        run_id=run_id,
+        scheduled_date=date(2026, 9, 8),
+        started_at=started_at,
+        completed_at=started_at + timedelta(minutes=1),
+        status=MonitoringStatus.SUCCESS,
+        successful_units=1,
+        failed_units=0,
+        source_count=1,
+        inserted_count=1,
+        changed_count=0,
+        unchanged_count=0,
+    )
 
 
 def test_adapter_implements_the_full_collector_contract() -> None:
@@ -86,3 +126,61 @@ def test_service_queries_only_registered_adapters() -> None:
 def test_duplicate_collector_registration_is_rejected() -> None:
     with pytest.raises(ValueError, match="available"):
         MonitoringService([AvailableAdapter(), AvailableAdapter()])
+
+
+def test_all_collectors_runs_use_one_global_order_and_page() -> None:
+    first = PagedAdapter(
+        "first",
+        [
+            make_run("first", "first-0", 0),
+            make_run("first", "first-2", 2),
+            make_run("first", "first-4", 4),
+            make_run("first", "first-6", 6),
+        ],
+    )
+    second = PagedAdapter(
+        "second",
+        [
+            make_run("second", "second-1", 1),
+            make_run("second", "second-3", 3),
+            make_run("second", "second-5", 5),
+            make_run("second", "second-7", 7),
+        ],
+    )
+    service = MonitoringService([first, second])
+
+    result = service.list_runs(offset=2, limit=3)
+
+    assert [run.run_id for run in result.items] == [
+        "first-2",
+        "second-3",
+        "first-4",
+    ]
+    assert first.list_calls == [
+        {
+            "started_from": None,
+            "started_to": None,
+            "offset": 0,
+            "limit": 5,
+        }
+    ]
+    assert second.list_calls == first.list_calls
+    assert result.total == 8
+    assert first.count_calls == [{"started_from": None, "started_to": None}]
+    assert second.count_calls == first.count_calls
+
+
+def test_runs_excludes_failed_adapter_from_total_and_reports_failure() -> None:
+    class BrokenAdapter(PagedAdapter):
+        def list_runs(self, **conditions: object) -> list[CollectorRun]:
+            del conditions
+            raise RuntimeError("Password=secret")
+
+    healthy = PagedAdapter("healthy", [make_run("healthy", "ok", 0)])
+    broken = BrokenAdapter("broken", [make_run("broken", "hidden", 1)])
+
+    result = MonitoringService([healthy, broken]).list_runs()
+
+    assert result.total == 1
+    assert [run.run_id for run in result.items] == ["ok"]
+    assert [error.collector_id for error in result.errors] == ["broken"]

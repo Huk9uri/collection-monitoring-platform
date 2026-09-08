@@ -6,6 +6,7 @@ from monitoring_api.adapters.base import MonitoringStatus
 from monitoring_api.adapters.fcdaum import (
     FCDAUM_ATTEMPTS_SQL,
     FCDAUM_ATTEMPTS_FOR_RUNS_SQL,
+    FCDAUM_COUNT_SQL,
     FCDAUM_FRESHNESS_SQL,
     FCDAUM_LATEST_SQL,
     FCDAUM_LIST_SQL,
@@ -108,6 +109,30 @@ def test_fcdaum_freshness_uses_only_the_three_fixed_business_tables() -> None:
     assert "dbo.fc_daum_qsc_report" in FCDAUM_FRESHNESS_SQL
     assert "dbo.fc_daum_qsc_report_issue" in FCDAUM_FRESHNESS_SQL
     assert "dbo.fc_daum_mission" in FCDAUM_FRESHNESS_SQL
+
+
+def test_fcdaum_count_runs_uses_fixed_query_and_utc_parameters() -> None:
+    sql = FCDAUM_COUNT_SQL
+    repository = FixtureRepository({sql: [{"total": 7}]})
+    started_from = datetime(2026, 9, 1, tzinfo=UTC)
+    started_to = datetime(2026, 9, 8, tzinfo=UTC)
+
+    total = FcDaumAdapter(repository).count_runs(
+        started_from=started_from, started_to=started_to
+    )
+
+    assert total == 7
+    assert repository.calls == [
+        (
+            sql,
+            (
+                datetime(2026, 9, 1),
+                datetime(2026, 9, 1),
+                datetime(2026, 9, 8),
+                datetime(2026, 9, 8),
+            ),
+        )
+    ]
 
 
 def test_read_only_connection_and_repository_reject_write_statements() -> None:
@@ -263,6 +288,7 @@ def test_all_fcdaum_fixed_queries_pass_the_read_only_validator() -> None:
     for sql in (
         FCDAUM_LATEST_SQL,
         FCDAUM_LIST_SQL,
+        FCDAUM_COUNT_SQL,
         FCDAUM_RUN_SQL,
         FCDAUM_ATTEMPTS_SQL,
         FCDAUM_ATTEMPTS_FOR_RUNS_SQL,

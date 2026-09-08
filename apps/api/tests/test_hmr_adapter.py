@@ -12,6 +12,7 @@ from monitoring_api.adapters.base import (
 from monitoring_api.adapters.hmr import (
     HMR_ATTEMPTS_SQL,
     HMR_ATTEMPTS_FOR_RUNS_SQL,
+    HMR_COUNT_SQL,
     HMR_FRESHNESS_SQL,
     HMR_LATEST_SQL,
     HMR_LIST_SQL,
@@ -124,6 +125,30 @@ def test_list_runs_converts_public_utc_filters_to_sql_datetime2_parameters() -> 
                 datetime(2026, 9, 8),
                 10,
                 25,
+            ),
+        )
+    ]
+
+
+def test_hmr_count_runs_uses_fixed_query_and_utc_parameters() -> None:
+    sql = HMR_COUNT_SQL
+    repository = FixtureRepository({sql: [{"total": 11}]})
+    started_from = datetime(2026, 9, 1, tzinfo=UTC)
+    started_to = datetime(2026, 9, 8, tzinfo=UTC)
+
+    total = HmrAdapter(repository).count_runs(
+        started_from=started_from, started_to=started_to
+    )
+
+    assert total == 11
+    assert repository.calls == [
+        (
+            sql,
+            (
+                datetime(2026, 9, 1),
+                datetime(2026, 9, 1),
+                datetime(2026, 9, 8),
+                datetime(2026, 9, 8),
             ),
         )
     ]
@@ -275,6 +300,7 @@ def test_all_hmr_fixed_queries_pass_the_read_only_validator() -> None:
     for sql in (
         HMR_LATEST_SQL,
         HMR_LIST_SQL,
+        HMR_COUNT_SQL,
         HMR_RUN_SQL,
         HMR_ATTEMPTS_SQL,
         HMR_ATTEMPTS_FOR_RUNS_SQL,

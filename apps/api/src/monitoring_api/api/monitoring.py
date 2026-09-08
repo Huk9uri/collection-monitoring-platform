@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -12,6 +12,7 @@ from monitoring_api.auth import require_role
 from monitoring_api.models import Role
 from monitoring_api.services.monitoring import (
     MonitoringService,
+    RunPageResult,
     ServiceResult,
     UnknownCollectorError,
 )
@@ -44,17 +45,29 @@ def _unknown_collector() -> HTTPException:
     )
 
 
-def _validate_run_range(
+def _resolve_run_range(
     started_from: datetime | None, started_to: datetime | None
-) -> None:
+) -> tuple[datetime, datetime]:
+    """누락 경계를 보완해 두 끝점을 포함하는 최대 93일 UTC 범위를 만든다."""
+
     for value in (started_from, started_to):
         if value is not None and value.utcoffset() != timedelta(0):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="조회 시각은 UTC여야 합니다.",
             )
-    if started_from is None or started_to is None:
-        return
+
+    if started_from is None and started_to is None:
+        started_to = datetime.now(UTC)
+        started_from = started_to - MAX_RUN_RANGE
+    elif started_from is None:
+        assert started_to is not None
+        started_from = started_to - MAX_RUN_RANGE
+    elif started_to is None:
+        started_to = started_from + MAX_RUN_RANGE
+
+    started_from = started_from.astimezone(UTC)
+    started_to = started_to.astimezone(UTC)
     if started_to < started_from:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -65,6 +78,7 @@ def _validate_run_range(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="조회 기간은 최대 93일입니다.",
         )
+    return started_from, started_to
 
 
 @router.get("/summary", response_model=ServiceResult[CollectorRun])
@@ -81,7 +95,7 @@ def collectors(service: MonitoringServiceDependency) -> ServiceResult[CollectorR
     return service.latest()
 
 
-@router.get("/runs", response_model=ServiceResult[CollectorRun])
+@router.get("/runs", response_model=RunPageResult)
 def runs(
     service: MonitoringServiceDependency,
     collector_id: Annotated[str | None, Query()] = None,
@@ -89,10 +103,10 @@ def runs(
     started_to: Annotated[datetime | None, Query()] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
     page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 50,
-) -> ServiceResult[CollectorRun]:
+) -> RunPageResult:
     """실행 이력을 제한된 기간과 페이지 크기로 조회한다."""
 
-    _validate_run_range(started_from, started_to)
+    started_from, started_to = _resolve_run_range(started_from, started_to)
     try:
         return service.list_runs(
             collector_id=collector_id,
