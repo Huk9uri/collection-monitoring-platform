@@ -137,6 +137,12 @@ def test_read_only_connection_and_repository_reject_write_statements() -> None:
         "SELECT 1 RESTORE DATABASE monitoring FROM DISK = 'backup.bak'",
         "SELECT 1 USE master",
         "SELECT NEXT VALUE FOR dbo.monitoring_sequence",
+        "SELECT 1 RECEIVE TOP (1) * FROM dbo.message_queue",
+        "SELECT 1 SEND ON CONVERSATION @handle MESSAGE TYPE [event] ('payload')",
+        "SELECT 1 WRITETEXT dbo.documents.body @pointer 'payload'",
+        "SELECT 1 UPDATETEXT dbo.documents.body @pointer 0 0 'payload'",
+        "SELECT 1 -- 첫 문장\rRECEIVE TOP (1) * FROM dbo.message_queue",
+        "SELECT '닫히지 않은 문자열",
     ],
 )
 def test_read_only_repository_rejects_semicolonless_batches_and_admin_commands(
@@ -263,3 +269,11 @@ def test_all_fcdaum_fixed_queries_pass_the_read_only_validator() -> None:
         FCDAUM_FRESHNESS_SQL,
     ):
         ReadOnlyRepository._validate_select(sql)
+
+
+def test_read_only_validator_allows_a_single_tsql_cte_query() -> None:
+    ReadOnlyRepository._validate_select(
+        "WITH latest AS (SELECT MAX(StartedAt) AS started_at "
+        "FROM dbo.FC_DAUM_COLLECTION_RUN) "
+        "SELECT started_at FROM latest"
+    )
