@@ -3,20 +3,55 @@
 FC다움, HMR 및 향후 추가될 데이터 수집기의 실행·적재·신선도를 한곳에서
 확인하기 위한 사내 운영 모니터링 플랫폼입니다.
 
-현재 단계는 설계 승인 단계입니다. 구현은 승인된 설계와 별도 한국어 구현
-계획에 따라 진행합니다.
+웹과 API는 하나의 모노레포에서 계약과 변경 이력을 공유하지만, 각각 독립된
+프로세스로 실행하고 배포할 수 있습니다.
 
-## 예정 구조
+## 구조
 
 ```text
 apps/
-├─ web/  # React + TypeScript + Vite
-└─ api/  # FastAPI
+├─ web/                 # React 19 + TypeScript + Vite 웹 애플리케이션
+└─ api/                 # Python 3.12 + FastAPI API 애플리케이션
 docs/
 ├─ 설계/
 ├─ 구현계획/
 └─ 운영/
 ```
+
+## 개발 명령
+
+먼저 Node.js 22 이상과 Python 3.12를 준비합니다. API 가상환경은
+`apps/api/.venv`에 생성하며, Windows에서는 다음과 같이 실행합니다.
+
+```powershell
+# 웹 의존성 설치
+npm install
+
+# API 가상환경 생성 및 pytest 설치
+py -3.12 -m venv apps/api/.venv
+apps/api/.venv/Scripts/python.exe -m pip install pytest
+```
+
+루트에서 공통 명령을 실행할 수 있습니다.
+
+```powershell
+# 웹 테스트
+npm test
+
+# API 테스트
+npm run test:api
+
+# 웹 정적 검사 및 타입 검사
+npm run lint
+npm run typecheck
+
+# 웹 프로덕션 빌드
+npm run build
+```
+
+웹 개발 서버는 `npm run dev --workspace=@collection-monitoring/web`로
+실행합니다. 웹은 `.env`의 `VITE_MONITORING_API_URL`로 읽기 전용 API 주소를
+설정하며, 필요한 키는 `.env.example`을 참고합니다.
 
 ## MVP 원칙
 
