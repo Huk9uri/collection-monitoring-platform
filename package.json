@@ -13,6 +13,6 @@
     "build": "npm run build --workspace=@collection-monitoring/web"
   },
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.13.0"
   }
 }

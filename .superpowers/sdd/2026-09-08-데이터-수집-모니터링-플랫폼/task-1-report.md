@@ -87,3 +87,38 @@
 - Vite와 React 플러그인은 빌드·개발에만 필요하므로 `devDependencies`에
   있으며, 브라우저 런타임 의존성은 React와 React DOM만 남는다.
 - 기존 미커밋 구현계획 문서는 수정하거나 스테이징하지 않는다.
+
+## Fix round 2: Node.js 버전 계약 정렬
+
+### 변경
+
+- 루트 `package.json`의 Node.js 최소 버전을 ESLint 10.10.0의 Node 22 지원
+  최소 버전과 일치하도록 `>=22.13.0`으로 올렸다.
+- `package-lock.json`의 루트 패키지 엔진 메타데이터를 같은 값으로 갱신했다.
+- README의 로컬 개발 사전 요구사항을 Node.js 22.13.0 이상으로 변경했다.
+
+### Covering test 파일
+
+- `apps/api/tests/test_package.py`: 활성화한 Python 3.12 가상환경에서 API
+  패키지 import를 검증한다.
+- `apps/web/src/app.test.tsx`: Vitest로 웹 앱의 모니터링 제목 렌더링을
+  검증한다.
+
+### 실행 명령과 결과
+
+| 명령 | 결과 |
+| --- | --- |
+| `npm test` | 통과: Vitest 1개 |
+| `npm run test:api` | 통과: 활성화한 API 가상환경에서 pytest 1개 |
+| `npm run lint` | 통과: ESLint 경고 0개 |
+| `npm run typecheck` | 통과 |
+| `npm run build` | 통과: Vite 프로덕션 빌드 생성 |
+
+### Self-review
+
+- Vite 7.3.6은 Node.js 22.12.0 이상을 요구하지만, ESLint 10.10.0은
+  Node.js 22.13.0 이상을 요구한다. 둘 중 더 엄격한 `>=22.13.0`을 루트
+  패키지, 잠금 파일, README에 동일하게 적용했다.
+- 이 수정은 Node 런타임 계약과 문서·잠금 파일의 정합성만 변경하며, 기존
+  API·웹 테스트와 공통 명령의 동작은 유지한다.
+- 기존 미커밋 구현계획 문서는 수정하거나 스테이징하지 않는다.
