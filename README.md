@@ -3,20 +3,76 @@
 FC다움, HMR 및 향후 추가될 데이터 수집기의 실행·적재·신선도를 한곳에서
 확인하기 위한 사내 운영 모니터링 플랫폼입니다.
 
-현재 단계는 설계 승인 단계입니다. 구현은 승인된 설계와 별도 한국어 구현
-계획에 따라 진행합니다.
+웹과 API는 하나의 모노레포에서 계약과 변경 이력을 공유하지만, 각각 독립된
+프로세스로 실행하고 배포할 수 있습니다.
 
-## 예정 구조
+MVP는 조회 전용입니다. 수집 실행·재실행·삭제 API나 버튼은 없고, 화면 데이터는
+운영자가 `새로고침`을 눌렀을 때만 다시 조회합니다. 로그인은 향후 OIDC/사내
+SSO/JWT를 연결할 수 있는 역할 경계만 있으며 현재 구현되어 있지 않습니다.
+
+## 구조
 
 ```text
 apps/
-├─ web/  # React + TypeScript + Vite
-└─ api/  # FastAPI
+├─ web/                 # React 19 + TypeScript + Vite 웹 애플리케이션
+└─ api/                 # Python 3.12 + FastAPI API 애플리케이션
 docs/
 ├─ 설계/
 ├─ 구현계획/
 └─ 운영/
 ```
+
+## 개발 명령
+
+먼저 Node.js 22.13.0 이상과 Python 3.12를 준비합니다. API 가상환경은
+`apps/api/.venv`에 생성하며, 사용 중인 운영체제에 맞는 활성화 명령을 실행한
+상태에서 API 테스트를 실행합니다.
+
+```powershell
+# 웹 의존성 설치
+npm install
+
+# API 및 테스트 의존성 설치
+py -3.12 -m venv apps/api/.venv
+apps/api/.venv/Scripts/python.exe -m pip install -e "apps/api[test]"
+apps/api/.venv/Scripts/Activate.ps1
+```
+
+macOS 또는 Linux에서는 다음 명령을 사용합니다.
+
+```bash
+python3.12 -m venv apps/api/.venv
+apps/api/.venv/bin/python -m pip install -e "apps/api[test]"
+source apps/api/.venv/bin/activate
+```
+
+루트에서 공통 명령을 실행할 수 있습니다.
+
+```powershell
+# 웹 테스트
+npm test
+
+# API 테스트
+npm run test:api
+
+# 웹 정적 검사 및 타입 검사
+npm run lint
+npm run typecheck
+
+# 웹 프로덕션 빌드
+npm run build
+```
+
+API와 웹의 실제 로컬 실행, 환경변수 위치, 읽기 전용 DB 계정 준비 방법은
+[`docs/운영/로컬-실행.md`](docs/운영/로컬-실행.md)를 따릅니다. 배포,
+reverse proxy, 여덟 상태별 조치와 장애 대응은
+[`docs/운영/배포-및-장애대응.md`](docs/운영/배포-및-장애대응.md)에 있습니다.
+
+두 DB 연결 환경변수 중 설정된 소스만 API에 등록됩니다. 둘 다 없으면
+`/health/live`는 프로세스 생존을 나타내므로 200이지만 `/health/ready`는
+명확히 503을 반환합니다. 연결 문자열은 데이터 소스별 SELECT 전용 계정과
+`ApplicationIntent=ReadOnly`를 사용해야 하며, 앱 시작 시 DB 연결이나 수집
+작업을 실행하지 않습니다.
 
 ## MVP 원칙
 
