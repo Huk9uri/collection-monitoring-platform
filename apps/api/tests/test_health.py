@@ -4,6 +4,9 @@ from fastapi.testclient import TestClient
 
 from monitoring_api.config import Settings, get_settings
 from monitoring_api.main import create_app
+from monitoring_api.services.monitoring import MonitoringService
+
+from test_monitoring_api import AvailableAdapter, NotReadyAdapter, UnavailableAdapter
 
 
 def test_live_health_returns_ok_without_a_database() -> None:
@@ -13,6 +16,61 @@ def test_live_health_returns_ok_without_a_database() -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_ready_health_returns_ok_when_every_adapter_is_ready() -> None:
+    service = MonitoringService([AvailableAdapter()])
+    with TestClient(create_app(monitoring_service=service)) as client:
+        response = client.get("/health/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "items": [{"collector_id": "available", "ready": True}],
+        "errors": [],
+    }
+
+
+def test_ready_health_returns_503_when_an_adapter_reports_not_ready() -> None:
+    service = MonitoringService([AvailableAdapter(), NotReadyAdapter()])
+    with TestClient(create_app(monitoring_service=service)) as client:
+        response = client.get("/health/ready")
+
+    assert response.status_code == 503
+    assert response.json()["status"] == "unavailable"
+    assert response.json()["items"][-1] == {
+        "collector_id": "not-ready",
+        "ready": False,
+    }
+    assert response.json()["errors"][-1]["code"] == "SOURCE_UNAVAILABLE"
+
+
+def test_ready_health_returns_safe_503_when_an_adapter_is_not_ready() -> None:
+    service = MonitoringService([AvailableAdapter(), UnavailableAdapter()])
+    with TestClient(create_app(monitoring_service=service)) as client:
+        response = client.get("/health/ready")
+
+    body = response.json()
+    serialized = response.text.casefold()
+    assert response.status_code == 503
+    assert body == {
+        "status": "unavailable",
+        "items": [
+            {"collector_id": "available", "ready": True},
+            {"collector_id": "unavailable", "ready": False},
+        ],
+        "errors": [
+            {
+                "collector_id": "unavailable",
+                "code": "SOURCE_UNAVAILABLE",
+                "message": "데이터 소스를 조회할 수 없습니다.",
+            }
+        ],
+    }
+    assert "select" not in serialized
+    assert "password" not in serialized
+    assert "super-secret" not in serialized
+    assert "private-db" not in serialized
 
 
 def test_settings_loads_plain_cors_origin_from_example_env_file() -> None:
