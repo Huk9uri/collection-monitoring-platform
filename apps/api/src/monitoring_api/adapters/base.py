@@ -133,9 +133,9 @@ def to_sql_datetime(value: datetime | None) -> datetime | None:
 
 
 def normalize_raw_status(raw_status: str) -> str:
-    """Python과 고정 SQL이 공유하는 상태 토큰 정규화 의미다."""
+    """SQL Server LTRIM/RTRIM처럼 ASCII space(CHAR(32)) 경계만 제거한다."""
 
-    return raw_status.strip().upper()
+    return raw_status.strip(" ").upper()
 
 
 def map_raw_status(raw_status: str) -> MonitoringStatus:

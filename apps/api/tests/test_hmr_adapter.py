@@ -66,6 +66,7 @@ def test_hmr_partial_status_maps_to_partial_failed() -> None:
         (" success ", True, 1, MonitoringStatus.SUCCESS),
         (" SuCcEsS_EmPtY ", True, 0, MonitoringStatus.SUCCESS_EMPTY),
         (" success ", False, 1, MonitoringStatus.FAILED),
+        ("\tSUCCESS\t", False, 1, MonitoringStatus.FAILED),
     ],
 )
 def test_hmr_attempt_status_normalization_matches_filter_and_committed_sql(
@@ -116,10 +117,15 @@ def test_hmr_attempt_status_normalization_matches_filter_and_committed_sql(
     normalized_committed_sql = (
         "COALESCE(UPPER(LTRIM(RTRIM(AttemptStatus))), '')"
     )
+    committed_case = (
+        f"CASE WHEN {normalized_committed_sql}\n"
+        "              IN ('SUCCESS', 'SUCCESS_EMPTY') THEN CAST(1 AS bit)\n"
+        "         ELSE CAST(0 AS bit) END AS committed"
+    )
     assert normalized_filter_sql in HMR_LIST_SQL
     assert normalized_filter_sql in HMR_COUNT_SQL
-    assert normalized_committed_sql in HMR_ATTEMPTS_SQL
-    assert normalized_committed_sql in HMR_ATTEMPTS_FOR_RUNS_SQL
+    assert committed_case in HMR_ATTEMPTS_SQL
+    assert committed_case in HMR_ATTEMPTS_FOR_RUNS_SQL
 
 
 def _attempt(unit_id: str, status: str, source_count: int = 1) -> CollectorAttempt:

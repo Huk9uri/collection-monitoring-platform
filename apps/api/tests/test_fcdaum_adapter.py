@@ -97,6 +97,7 @@ def test_fcdaum_retry_success_is_warning_and_all_attempts_are_preserved() -> Non
         (" success ", True, 1, MonitoringStatus.SUCCESS),
         (" SuCcEsS_EmPtY ", True, 0, MonitoringStatus.SUCCESS_EMPTY),
         (" success ", False, 1, MonitoringStatus.FAILED),
+        ("\tSUCCESS\t", True, 1, MonitoringStatus.FAILED),
     ],
 )
 def test_fcdaum_attempt_status_normalization_matches_canonical_sql_filter(
