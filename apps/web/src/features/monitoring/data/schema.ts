@@ -17,6 +17,37 @@ export const utcDateTimeSchema = z
     message: 'UTC ISO 8601 시각이어야 합니다.',
   })
 
+const MAX_RUN_RANGE_MILLISECONDS = 93 * 24 * 60 * 60 * 1_000
+
+export const runsQueryConditionsSchema = z
+  .object({
+    collectorId: z.string().optional(),
+    startedFrom: utcDateTimeSchema.optional(),
+    startedTo: utcDateTimeSchema.optional(),
+    offset: z.number().int().min(0).max(10_000).optional(),
+    pageSize: z.number().int().min(1).max(100).optional(),
+  })
+  .superRefine(({ startedFrom, startedTo }, context) => {
+    if (startedFrom === undefined || startedTo === undefined) {
+      return
+    }
+
+    const range = Date.parse(startedTo) - Date.parse(startedFrom)
+    if (range < 0) {
+      context.addIssue({
+        code: 'custom',
+        message: '조회 종료 시각은 시작 시각보다 빠를 수 없습니다.',
+        path: ['startedTo'],
+      })
+    } else if (range > MAX_RUN_RANGE_MILLISECONDS) {
+      context.addIssue({
+        code: 'custom',
+        message: '조회 기간은 최대 93일입니다.',
+        path: ['startedTo'],
+      })
+    }
+  })
+
 export const collectorAttemptSchema = z.object({
   unit_id: z.string(),
   unit_name: z.string(),
@@ -78,6 +109,7 @@ export const runsResponseSchema = z.object({
 })
 
 export type MonitoringStatus = z.infer<typeof monitoringStatusSchema>
+export type RunsQueryConditions = z.input<typeof runsQueryConditionsSchema>
 export type CollectorAttempt = z.infer<typeof collectorAttemptSchema>
 export type CollectorRun = z.infer<typeof collectorRunSchema>
 export type FreshnessRecord = z.infer<typeof freshnessRecordSchema>

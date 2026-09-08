@@ -39,7 +39,7 @@ describe('monitoringQueries', () => {
     ).toEqual(['monitoring', 'freshness', { collectorId: 'hmr' }])
   })
 
-  it('자동 polling을 설정하지 않는다', () => {
+  it('사용자가 invalidate하기 전에는 자동 재조회하지 않는다', () => {
     const options = [
       monitoringQueries.summary(),
       monitoringQueries.collectors(),
@@ -48,8 +48,12 @@ describe('monitoringQueries', () => {
       monitoringQueries.freshness({}),
     ]
 
-    expect(options.every((option) => option.refetchInterval === undefined)).toBe(
-      true,
-    )
+    for (const option of options) {
+      expect(option.staleTime).toBe(Number.POSITIVE_INFINITY)
+      expect(option.refetchInterval).toBeUndefined()
+      expect(option.refetchOnWindowFocus).toBe(false)
+      expect(option.refetchOnReconnect).toBe(false)
+      expect(option.refetchOnMount).toBe(false)
+    }
   })
 })

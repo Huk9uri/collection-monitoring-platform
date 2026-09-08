@@ -7,16 +7,12 @@ import {
   freshnessResponseSchema,
   runDetailResponseSchema,
   runsResponseSchema,
+  runsQueryConditionsSchema,
   summaryResponseSchema,
+  type RunsQueryConditions,
 } from './schema'
 
-export interface RunsQueryConditions {
-  collectorId?: string
-  startedFrom?: string
-  startedTo?: string
-  offset?: number
-  pageSize?: number
-}
+export type { RunsQueryConditions } from './schema'
 
 export interface FreshnessQueryConditions {
   collectorId?: string
@@ -44,14 +40,16 @@ export function getCollectors() {
   return getParsed('/api/v1/monitoring/collectors', collectorsResponseSchema)
 }
 
-export function getRuns(conditions: RunsQueryConditions) {
+export async function getRuns(conditions: RunsQueryConditions) {
+  const validated = runsQueryConditionsSchema.parse(conditions)
+
   return getParsed('/api/v1/monitoring/runs', runsResponseSchema, {
     params: {
-      collector_id: conditions.collectorId,
-      started_from: conditions.startedFrom,
-      started_to: conditions.startedTo,
-      offset: conditions.offset,
-      page_size: conditions.pageSize,
+      collector_id: validated.collectorId,
+      started_from: validated.startedFrom,
+      started_to: validated.startedTo,
+      offset: validated.offset,
+      page_size: validated.pageSize,
     },
   })
 }
