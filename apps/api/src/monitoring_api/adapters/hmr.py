@@ -6,12 +6,14 @@ import json
 from collections import defaultdict
 from datetime import datetime
 from typing import Protocol
+from uuid import UUID
 
 from monitoring_api.adapters.base import (
     CollectorAttempt,
     CollectorRun,
     FreshnessRecord,
     attempt_from_row,
+    as_utc,
     freshness_from_rows,
     run_from_row,
     to_sql_datetime,
@@ -39,6 +41,7 @@ _HMR_RUN_COLUMNS = """
 
 _HMR_RAW_STATUS_SQL = """CASE UPPER(LTRIM(RTRIM(runs.RunStatus)))
     WHEN 'SUCCESS' THEN 'SUCCESS'
+    WHEN 'SUCCESS_WITH_DATA' THEN 'SUCCESS'
     WHEN 'SUCCESS_EMPTY' THEN 'SUCCESS_EMPTY'
     WHEN 'WARNING' THEN 'WARNING'
     WHEN 'PARTIAL' THEN 'PARTIAL_FAILED'
@@ -73,7 +76,7 @@ _HMR_CANONICAL_STATUS_SQL = f"""CASE
                 AND latest.ChannelName = attempt.ChannelName
           )
           AND {_HMR_NORMALIZED_ATTEMPT_STATUS_SQL}
-              IN ('SUCCESS', 'SUCCESS_EMPTY')
+              IN ('SUCCESS', 'SUCCESS_EMPTY', 'SUCCESS_WITH_DATA')
     ) THEN 'FAILED'
     WHEN EXISTS (
         SELECT 1 FROM dbo.CHANNEL_COLLECTION_ATTEMPT AS attempt
@@ -85,7 +88,7 @@ _HMR_CANONICAL_STATUS_SQL = f"""CASE
                 AND latest.ChannelName = attempt.ChannelName
           )
           AND {_HMR_NORMALIZED_ATTEMPT_STATUS_SQL}
-              NOT IN ('SUCCESS', 'SUCCESS_EMPTY')
+              NOT IN ('SUCCESS', 'SUCCESS_EMPTY', 'SUCCESS_WITH_DATA')
     ) THEN 'PARTIAL_FAILED'
     WHEN EXISTS (
         SELECT 1 FROM dbo.CHANNEL_COLLECTION_ATTEMPT AS attempt
@@ -93,7 +96,7 @@ _HMR_CANONICAL_STATUS_SQL = f"""CASE
           AND (
               attempt.AttemptNo > 1
               OR {_HMR_NORMALIZED_ATTEMPT_STATUS_SQL}
-                  NOT IN ('SUCCESS', 'SUCCESS_EMPTY')
+                  NOT IN ('SUCCESS', 'SUCCESS_EMPTY', 'SUCCESS_WITH_DATA')
           )
     ) THEN 'WARNING'
     WHEN NOT EXISTS (
@@ -129,6 +132,21 @@ WHERE (? IS NULL OR runs.StartedAt >= ?)
   AND (? IS NULL OR runs.StartedAt <= ?)
   AND (? IS NULL OR {_HMR_CANONICAL_STATUS_SQL} = ?)"""
 
+HMR_STATUS_COUNTS_SQL = f"""SELECT canonical_status AS status, COUNT_BIG(*) AS total
+FROM (
+    SELECT {_HMR_CANONICAL_STATUS_SQL} AS canonical_status
+    FROM dbo.CHANNEL_COLLECTION_RUN AS runs
+    WHERE runs.StartedAt >= ? AND runs.StartedAt < ?
+) AS daily_runs
+GROUP BY canonical_status"""
+
+HMR_LATEST_SUCCESS_SQL = f"""SELECT TOP (1)
+    runs.FinishedAt AS last_successful_check_at
+FROM dbo.CHANNEL_COLLECTION_RUN AS runs
+WHERE runs.FinishedAt IS NOT NULL
+  AND {_HMR_CANONICAL_STATUS_SQL} IN ('SUCCESS', 'SUCCESS_EMPTY', 'WARNING')
+ORDER BY runs.FinishedAt DESC, CONVERT(char(36), runs.RunId) DESC"""
+
 HMR_RUN_SQL = f"""SELECT
 {_HMR_RUN_COLUMNS}
 FROM dbo.CHANNEL_COLLECTION_RUN
@@ -146,8 +164,8 @@ HMR_ATTEMPTS_SQL = f"""SELECT
     ChangedCount AS changed_count,
     SkippedCount AS unchanged_count,
     CASE WHEN {_HMR_NORMALIZED_SELECTED_ATTEMPT_STATUS_SQL}
-              IN ('SUCCESS', 'SUCCESS_EMPTY') THEN CAST(1 AS bit)
-         ELSE CAST(0 AS bit) END AS committed,
+              IN ('SUCCESS', 'SUCCESS_EMPTY', 'SUCCESS_WITH_DATA') THEN CAST(1 AS bit)
+         ELSE NULL END AS committed,
     ErrorCategory AS error_category
 FROM dbo.CHANNEL_COLLECTION_ATTEMPT
 WHERE RunId = ?
@@ -166,8 +184,8 @@ HMR_ATTEMPTS_FOR_RUNS_SQL = f"""SELECT
     ChangedCount AS changed_count,
     SkippedCount AS unchanged_count,
     CASE WHEN {_HMR_NORMALIZED_SELECTED_ATTEMPT_STATUS_SQL}
-              IN ('SUCCESS', 'SUCCESS_EMPTY') THEN CAST(1 AS bit)
-         ELSE CAST(0 AS bit) END AS committed,
+              IN ('SUCCESS', 'SUCCESS_EMPTY', 'SUCCESS_WITH_DATA') THEN CAST(1 AS bit)
+         ELSE NULL END AS committed,
     ErrorCategory AS error_category
 FROM dbo.CHANNEL_COLLECTION_ATTEMPT
 WHERE RunId IN (
@@ -278,8 +296,26 @@ class HmrAdapter:
         )
         return int(rows[0]["total"]) if rows else 0
 
-    def get_run(self, run_id: str) -> CollectorRun | None:
-        runs = self._runs(self._repository.fetch_all(HMR_RUN_SQL, (run_id,)))
+    def count_runs_by_status(
+        self, *, started_from: datetime, started_to: datetime
+    ) -> dict[MonitoringStatus, int]:
+        rows = self._repository.fetch_all(
+            HMR_STATUS_COUNTS_SQL,
+            (to_sql_datetime(started_from), to_sql_datetime(started_to)),
+        )
+        return {
+            MonitoringStatus(str(row["status"])): int(row["total"])
+            for row in rows
+        }
+
+    def latest_successful_check_at(self) -> datetime | None:
+        rows = self._repository.fetch_all(HMR_LATEST_SUCCESS_SQL)
+        if not rows:
+            return None
+        return as_utc(rows[0].get("last_successful_check_at"))  # type: ignore[arg-type]
+
+    def get_run(self, run_id: UUID) -> CollectorRun | None:
+        runs = self._runs(self._repository.fetch_all(HMR_RUN_SQL, (str(run_id),)))
         return runs[0] if runs else None
 
     def freshness(self) -> list[FreshnessRecord]:

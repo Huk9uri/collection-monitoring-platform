@@ -1,7 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { apiClient } from '../../../lib/api'
-import { getRuns, getSummary, type RunsQueryConditions } from './api'
+import {
+  getRunDetail,
+  getRuns,
+  getSummary,
+  type RunsQueryConditions,
+} from './api'
+
+const sourceStatus = {
+  registered: 2,
+  succeeded: 2,
+  failed: 0,
+  all_sources_unavailable: false,
+}
 
 describe('monitoring API', () => {
   afterEach(() => {
@@ -11,24 +23,13 @@ describe('monitoring API', () => {
   it('HTTP 응답을 Zod 계약으로 검증한다', async () => {
     vi.spyOn(apiClient, 'get').mockResolvedValue({
       data: {
-        items: [
-          {
-            collector_id: 'hmr',
-            run_id: 'run-invalid-time',
-            scheduled_date: '2026-09-08',
-            started_at: '2026-09-08T10:00:00+09:00',
-            completed_at: null,
-            status: 'SUCCESS',
-            successful_units: 1,
-            failed_units: 0,
-            source_count: 1,
-            inserted_count: 1,
-            changed_count: 0,
-            unchanged_count: 0,
-            attempts: [],
-          },
-        ],
+        overall_status: 'SUCCESS',
+        registered_collectors: '2',
+        today_success_runs: 1,
+        today_incident_runs: 0,
+        running_runs: 0,
         errors: [],
+        source_status: sourceStatus,
       },
     })
 
@@ -76,7 +77,7 @@ describe('monitoring API', () => {
 
   it('93일 경계 조건을 FastAPI query parameter로 변환한다', async () => {
     const request = vi.spyOn(apiClient, 'get').mockResolvedValue({
-      data: { items: [], errors: [], total: 0 },
+      data: { items: [], errors: [], source_status: sourceStatus, total: 0 },
     })
 
     await getRuns({
@@ -98,5 +99,14 @@ describe('monitoring API', () => {
         page_size: 100,
       },
     })
+  })
+
+  it('잘못된 run_id는 상세 HTTP 요청 전에 거부한다', async () => {
+    const request = vi.spyOn(apiClient, 'get')
+
+    await expect(
+      getRunDetail({ collectorId: 'hmr', runId: 'not-a-uuid' }),
+    ).rejects.toMatchObject({ name: 'ZodError' })
+    expect(request).not.toHaveBeenCalled()
   })
 })

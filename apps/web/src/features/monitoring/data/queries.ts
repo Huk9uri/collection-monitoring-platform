@@ -2,11 +2,9 @@ import { queryOptions } from '@tanstack/react-query'
 
 import {
   getCollectors,
-  getFreshness,
   getRunDetail,
   getRuns,
   getSummary,
-  type FreshnessQueryConditions,
   type RunDetailConditions,
   type RunsQueryConditions,
 } from './api'
@@ -41,12 +39,6 @@ export const monitoringQueries = {
     queryOptions({
       queryKey: ['monitoring', 'run-detail', conditions] as const,
       queryFn: () => getRunDetail(conditions),
-      ...manualRefreshOnly,
-    }),
-  freshness: (conditions: FreshnessQueryConditions) =>
-    queryOptions({
-      queryKey: ['monitoring', 'freshness', conditions] as const,
-      queryFn: () => getFreshness(conditions),
       ...manualRefreshOnly,
     }),
 }

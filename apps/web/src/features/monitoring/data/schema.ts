@@ -49,12 +49,18 @@ export const runsQueryConditionsSchema = z
     }
   })
 
+export const runDetailConditionsSchema = z.object({
+  collectorId: z.string().min(1),
+  runId: z.uuid(),
+})
+
 export const collectorAttemptSchema = z.object({
   unit_id: z.string(),
   unit_name: z.string(),
   attempt_no: z.number().int(),
   started_at: utcDateTimeSchema,
   completed_at: utcDateTimeSchema.nullable(),
+  outcome: monitoringStatusSchema,
   raw_status: z.string(),
   source_count: z.number().int(),
   inserted_count: z.number().int(),
@@ -66,7 +72,7 @@ export const collectorAttemptSchema = z.object({
 
 export const collectorRunSchema = z.object({
   collector_id: z.string(),
-  run_id: z.string(),
+  run_id: z.uuid(),
   scheduled_date: z.iso.date(),
   started_at: utcDateTimeSchema,
   completed_at: utcDateTimeSchema.nullable(),
@@ -83,7 +89,24 @@ export const collectorRunSchema = z.object({
 export const freshnessRecordSchema = z.object({
   collector_id: z.string(),
   dataset_id: z.string(),
-  latest_at: utcDateTimeSchema.nullable(),
+  last_successful_check_at: utcDateTimeSchema.nullable(),
+  latest_data_at: utcDateTimeSchema.nullable(),
+  freshness_sla_minutes: z.number().int().positive().nullable(),
+  freshness_overdue: z.boolean(),
+})
+
+export const collectorSummarySchema = z.object({
+  collector_id: z.string(),
+  display_name: z.string(),
+  status: monitoringStatusSchema,
+  latest_run: collectorRunSchema.nullable(),
+  schedule_timezone: z.string().nullable(),
+  daily_scheduled_time: z.string().nullable(),
+  max_duration_minutes: z.number().int().positive().nullable(),
+  last_successful_check_at: utcDateTimeSchema.nullable(),
+  latest_data_at: utcDateTimeSchema.nullable(),
+  freshness_overdue: z.boolean(),
+  freshness: z.array(freshnessRecordSchema),
 })
 
 export const sourceErrorSchema = z.object({
@@ -92,29 +115,51 @@ export const sourceErrorSchema = z.object({
   message: z.string(),
 })
 
+export const sourceStatusSchema = z.object({
+  registered: z.number().int().min(0),
+  succeeded: z.number().int().min(0),
+  failed: z.number().int().min(0),
+  all_sources_unavailable: z.boolean(),
+})
+
 const serviceResponseSchema = <T extends z.ZodType>(itemSchema: T) =>
   z.object({
     items: z.array(itemSchema),
     errors: z.array(sourceErrorSchema),
+    source_status: sourceStatusSchema,
   })
 
-export const summaryResponseSchema = serviceResponseSchema(collectorRunSchema)
-export const collectorsResponseSchema = serviceResponseSchema(collectorRunSchema)
+export const summaryResponseSchema = z.object({
+  overall_status: monitoringStatusSchema,
+  registered_collectors: z.number().int().min(0),
+  today_success_runs: z.number().int().min(0),
+  today_incident_runs: z.number().int().min(0),
+  running_runs: z.number().int().min(0),
+  errors: z.array(sourceErrorSchema),
+  source_status: sourceStatusSchema,
+})
+export const collectorsResponseSchema = serviceResponseSchema(
+  collectorSummarySchema,
+)
 export const runDetailResponseSchema = serviceResponseSchema(collectorRunSchema)
 export const freshnessResponseSchema = serviceResponseSchema(freshnessRecordSchema)
 
 export const runsResponseSchema = z.object({
   items: z.array(collectorRunSchema),
   errors: z.array(sourceErrorSchema),
+  source_status: sourceStatusSchema,
   total: z.number().int(),
 })
 
 export type MonitoringStatus = z.infer<typeof monitoringStatusSchema>
 export type RunsQueryConditions = z.input<typeof runsQueryConditionsSchema>
+export type RunDetailConditions = z.input<typeof runDetailConditionsSchema>
 export type CollectorAttempt = z.infer<typeof collectorAttemptSchema>
 export type CollectorRun = z.infer<typeof collectorRunSchema>
+export type CollectorSummary = z.infer<typeof collectorSummarySchema>
 export type FreshnessRecord = z.infer<typeof freshnessRecordSchema>
 export type SourceError = z.infer<typeof sourceErrorSchema>
+export type SourceStatus = z.infer<typeof sourceStatusSchema>
 export type SummaryResponse = z.infer<typeof summaryResponseSchema>
 export type CollectorsResponse = z.infer<typeof collectorsResponseSchema>
 export type RunDetailResponse = z.infer<typeof runDetailResponseSchema>

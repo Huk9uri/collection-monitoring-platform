@@ -1,4 +1,5 @@
 from datetime import UTC, date, datetime, timedelta
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 import pytest
 
@@ -11,6 +12,17 @@ from monitoring_api.adapters.base import (
 from monitoring_api.services.monitoring import MonitoringService, UnknownCollectorError
 
 
+ORDERED_RUN_IDS = {
+    "run-x": UUID("00000000-0000-4000-8000-000000000001"),
+    "run-y": UUID("00000000-0000-4000-8000-000000000002"),
+    "run-z": UUID("00000000-0000-4000-8000-000000000003"),
+}
+
+
+def run_uuid(label: str) -> UUID:
+    return ORDERED_RUN_IDS.get(label, uuid5(NAMESPACE_URL, f"monitoring:{label}"))
+
+
 class AvailableAdapter:
     collector_id = "available"
     display_name = "정상 수집기"
@@ -18,7 +30,7 @@ class AvailableAdapter:
     def latest(self) -> CollectorRun | None:
         return CollectorRun(
             collector_id=self.collector_id,
-            run_id="run-ok",
+            run_id=run_uuid("run-ok"),
             scheduled_date=date(2026, 9, 8),
             started_at=datetime(2026, 9, 8, 1, tzinfo=UTC),
             completed_at=datetime(2026, 9, 8, 1, 1, tzinfo=UTC),
@@ -38,15 +50,15 @@ class AvailableAdapter:
     def count_runs(self, **_: object) -> int:
         return 1
 
-    def get_run(self, run_id: str) -> CollectorRun | None:
-        return self.latest() if run_id == "run-ok" else None
+    def get_run(self, run_id: UUID) -> CollectorRun | None:
+        return self.latest() if run_id == run_uuid("run-ok") else None
 
     def freshness(self) -> list[FreshnessRecord]:
         return [
             FreshnessRecord(
                 collector_id=self.collector_id,
                 dataset_id="orders",
-                latest_at=datetime(2026, 9, 8, 1, tzinfo=UTC),
+                latest_data_at=datetime(2026, 9, 8, 1, tzinfo=UTC),
             )
         ]
 
@@ -95,7 +107,7 @@ def make_run(
     started_at = datetime(2026, 9, 8, 1, tzinfo=UTC) - timedelta(minutes=minute)
     return CollectorRun(
         collector_id=collector_id,
-        run_id=run_id,
+        run_id=run_uuid(run_id),
         scheduled_date=date(2026, 9, 8),
         started_at=started_at,
         completed_at=started_at + timedelta(minutes=1),
@@ -130,7 +142,7 @@ def test_service_queries_only_registered_adapters() -> None:
     service = MonitoringService([AvailableAdapter()])
 
     with pytest.raises(UnknownCollectorError):
-        service.get_run("not-registered", "run-ok")
+        service.get_run("not-registered", run_uuid("run-ok"))
 
 
 def test_duplicate_collector_registration_is_rejected() -> None:
@@ -162,9 +174,9 @@ def test_all_collectors_runs_use_one_global_order_and_page() -> None:
     result = service.list_runs(offset=2, limit=3)
 
     assert [run.run_id for run in result.items] == [
-        "first-2",
-        "second-3",
-        "first-4",
+        run_uuid("first-2"),
+        run_uuid("second-3"),
+        run_uuid("first-4"),
     ]
     assert first.list_calls == [
         {
@@ -192,7 +204,7 @@ def test_runs_excludes_failed_adapter_from_total_and_reports_failure() -> None:
     result = MonitoringService([healthy, broken]).list_runs()
 
     assert result.total == 1
-    assert [run.run_id for run in result.items] == ["ok"]
+    assert [run.run_id for run in result.items] == [run_uuid("ok")]
     assert [error.collector_id for error in result.errors] == ["broken"]
 
 
@@ -216,7 +228,9 @@ def test_status_filter_is_applied_before_adapter_pagination_and_count() -> None:
         limit=1,
     )
 
-    assert [run.run_id for run in result.items] == ["failed-second-page"]
+    assert [run.run_id for run in result.items] == [
+        run_uuid("failed-second-page")
+    ]
     assert result.total == 1
     assert adapter.count_calls == [
         {
@@ -259,6 +273,6 @@ def test_same_started_at_candidate_boundary_uses_run_id_desc_order() -> None:
 
     result = MonitoringService([first, second]).list_runs(offset=1, limit=1)
 
-    assert [run.run_id for run in result.items] == ["run-y"]
+    assert [run.run_id for run in result.items] == [run_uuid("run-y")]
     assert first.list_calls[0]["limit"] == 2
     assert second.list_calls[0]["limit"] == 2

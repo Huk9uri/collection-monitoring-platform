@@ -8,7 +8,7 @@ afterEach(cleanup)
 
 const partialFailedRun: CollectorRun = {
   collector_id: 'fcdaum',
-  run_id: 'run-20260908',
+  run_id: '00000000-0000-4000-8000-000000000001',
   scheduled_date: '2026-09-08',
   started_at: '2026-09-08T01:00:00Z',
   completed_at: '2026-09-08T01:03:00Z',
@@ -26,7 +26,8 @@ const partialFailedRun: CollectorRun = {
       attempt_no: 1,
       started_at: '2026-09-08T01:00:00Z',
       completed_at: '2026-09-08T01:01:00Z',
-      raw_status: 'SUCCESS',
+      outcome: 'SUCCESS',
+      raw_status: 'SUCCESS_WITH_DATA',
       source_count: 5,
       inserted_count: 2,
       changed_count: 1,
@@ -40,6 +41,7 @@ const partialFailedRun: CollectorRun = {
       attempt_no: 2,
       started_at: '2026-09-08T01:02:00Z',
       completed_at: '2026-09-08T01:03:00Z',
+      outcome: 'FAILED',
       raw_status: 'FAILED',
       source_count: 5,
       inserted_count: 0,
@@ -54,6 +56,7 @@ const partialFailedRun: CollectorRun = {
       attempt_no: 1,
       started_at: '2026-09-08T01:03:00Z',
       completed_at: null,
+      outcome: 'RUNNING',
       raw_status: 'RUNNING',
       source_count: 0,
       inserted_count: 0,
@@ -68,6 +71,7 @@ const partialFailedRun: CollectorRun = {
       attempt_no: 1,
       started_at: '2026-09-08T01:03:00Z',
       completed_at: null,
+      outcome: 'NOT_RUN',
       raw_status: 'NOT_RUN',
       source_count: 0,
       inserted_count: 0,
@@ -82,6 +86,7 @@ const partialFailedRun: CollectorRun = {
       attempt_no: 1,
       started_at: '2026-09-08T01:03:00Z',
       completed_at: null,
+      outcome: 'WARNING',
       raw_status: 'PAUSED_EXTERNALLY',
       source_count: 0,
       inserted_count: 0,
@@ -115,7 +120,22 @@ describe('RunDetailSheet', () => {
     )
   })
 
-  it('진행·미실행·알 수 없는 하위 상태를 성공과 구분한다', () => {
+  it('HMR 원시 SUCCESS_WITH_DATA를 canonical outcome 기준 성공으로 표시한다', () => {
+    render(
+      <RunDetailSheet
+        open
+        onOpenChange={vi.fn()}
+        run={partialFailedRun}
+        isLoading={false}
+      />,
+    )
+
+    expect(screen.getByText('한촌설렁탕').closest('tr')?.textContent).toContain(
+      '성공',
+    )
+  })
+
+  it('진행·미실행·주의 canonical outcome을 성공과 구분한다', () => {
     render(
       <RunDetailSheet
         open
@@ -127,11 +147,11 @@ describe('RunDetailSheet', () => {
 
     const runningRow = screen.getByText('진행 작업').closest('tr')
     const notRunRow = screen.getByText('미실행 작업').closest('tr')
-    const unknownRow = screen.getByText('알 수 없는 작업').closest('tr')
+    const warningRow = screen.getByText('알 수 없는 작업').closest('tr')
     expect(runningRow?.textContent).toContain('실행 중')
     expect(notRunRow?.textContent).toContain('미실행')
-    expect(unknownRow?.textContent).toContain('상태 확인 필요')
-    for (const row of [runningRow, notRunRow, unknownRow]) {
+    expect(warningRow?.textContent).toContain('주의')
+    for (const row of [runningRow, notRunRow, warningRow]) {
       expect(row?.textContent).not.toContain('성공')
     }
   })

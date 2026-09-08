@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from typing import Protocol
+from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -20,6 +21,7 @@ class CollectorAttempt(BaseModel):
     started_at: datetime
     completed_at: datetime | None
     raw_status: str
+    outcome: MonitoringStatus
     source_count: int
     inserted_count: int
     changed_count: int
@@ -37,7 +39,7 @@ class CollectorRun(BaseModel):
     """수집기별 스키마 차이를 제거한 실행 정보다."""
 
     collector_id: str
-    run_id: str
+    run_id: UUID
     scheduled_date: date
     started_at: datetime
     completed_at: datetime | None
@@ -57,13 +59,16 @@ class CollectorRun(BaseModel):
 
 
 class FreshnessRecord(BaseModel):
-    """고정 업무 데이터셋의 최근 적재 시각이다."""
+    """고정 업무 데이터셋의 확인 시각과 실제 변경 시각을 구분한다."""
 
     collector_id: str
     dataset_id: str
-    latest_at: datetime | None
+    last_successful_check_at: datetime | None = None
+    latest_data_at: datetime | None
+    freshness_sla_minutes: int | None = None
+    freshness_overdue: bool = False
 
-    @field_validator("latest_at")
+    @field_validator("last_successful_check_at", "latest_data_at")
     @classmethod
     def require_utc(cls, value: datetime | None) -> datetime | None:
         return require_utc_datetime(value)
@@ -95,7 +100,13 @@ class CollectorAdapter(Protocol):
         status: MonitoringStatus | None = None,
     ) -> int: ...
 
-    def get_run(self, run_id: str) -> CollectorRun | None: ...
+    def count_runs_by_status(
+        self, *, started_from: datetime, started_to: datetime
+    ) -> dict[MonitoringStatus, int]: ...
+
+    def latest_successful_check_at(self) -> datetime | None: ...
+
+    def get_run(self, run_id: UUID) -> CollectorRun | None: ...
 
     def freshness(self) -> list[FreshnessRecord]: ...
 
@@ -144,6 +155,7 @@ def map_raw_status(raw_status: str) -> MonitoringStatus:
     normalized = normalize_raw_status(raw_status)
     mappings = {
         "SUCCESS": MonitoringStatus.SUCCESS,
+        "SUCCESS_WITH_DATA": MonitoringStatus.SUCCESS,
         "SUCCESS_EMPTY": MonitoringStatus.SUCCESS_EMPTY,
         "WARNING": MonitoringStatus.WARNING,
         "PARTIAL": MonitoringStatus.PARTIAL_FAILED,
@@ -154,6 +166,25 @@ def map_raw_status(raw_status: str) -> MonitoringStatus:
         "NOT_RUN": MonitoringStatus.NOT_RUN,
     }
     return mappings.get(normalized, MonitoringStatus.FAILED)
+
+
+def attempt_outcome(
+    raw_status: str, *, source_count: int, committed: bool | None
+) -> MonitoringStatus:
+    """원시 시도 상태와 확인 가능한 commit 사실을 canonical 결과로 바꾼다."""
+
+    normalized = normalize_raw_status(raw_status)
+    if committed is False:
+        return MonitoringStatus.FAILED
+    if normalized == "SUCCESS_EMPTY":
+        return MonitoringStatus.SUCCESS_EMPTY
+    if normalized in {"SUCCESS", "SUCCESS_WITH_DATA"}:
+        return (
+            MonitoringStatus.SUCCESS_EMPTY
+            if source_count == 0
+            else MonitoringStatus.SUCCESS
+        )
+    return map_raw_status(normalized)
 
 
 def final_attempts(attempts: list[CollectorAttempt]) -> list[CollectorAttempt]:
@@ -168,10 +199,10 @@ def final_attempts(attempts: list[CollectorAttempt]) -> list[CollectorAttempt]:
 
 
 def _attempt_succeeded(attempt: CollectorAttempt) -> bool:
-    return (
-        normalize_raw_status(attempt.raw_status) in {"SUCCESS", "SUCCESS_EMPTY"}
-        and attempt.committed is not False
-    )
+    return attempt.outcome in {
+        MonitoringStatus.SUCCESS,
+        MonitoringStatus.SUCCESS_EMPTY,
+    }
 
 
 def derive_run_status(
@@ -210,18 +241,26 @@ def derive_run_status(
 def attempt_from_row(row: Mapping[str, object]) -> CollectorAttempt:
     """고정 SQL의 별칭 행을 공통 시도 모델로 변환한다."""
 
+    source_count = int(row.get("source_count") or 0)
+    committed = None if row.get("committed") is None else bool(row["committed"])
+    raw_status = str(row["raw_status"])
     return CollectorAttempt(
         unit_id=str(row["unit_id"]),
         unit_name=str(row["unit_name"]),
         attempt_no=int(row["attempt_no"]),
         started_at=as_utc(row["started_at"]),  # type: ignore[arg-type]
         completed_at=as_utc(row.get("completed_at")),  # type: ignore[arg-type]
-        raw_status=str(row["raw_status"]),
-        source_count=int(row.get("source_count") or 0),
+        raw_status=raw_status,
+        outcome=attempt_outcome(
+            raw_status,
+            source_count=source_count,
+            committed=committed,
+        ),
+        source_count=source_count,
         inserted_count=int(row.get("inserted_count") or 0),
         changed_count=int(row.get("changed_count") or 0),
         unchanged_count=int(row.get("unchanged_count") or 0),
-        committed=None if row.get("committed") is None else bool(row["committed"]),
+        committed=committed,
         error_category=(
             None if row.get("error_category") is None else str(row["error_category"])
         ),
@@ -241,7 +280,12 @@ def run_from_row(
         scheduled = scheduled.date()
     if not isinstance(scheduled, date):
         scheduled = date.fromisoformat(str(scheduled))
-    if selected:
+    mapped_raw_status = map_raw_status(str(row["raw_status"]))
+    if selected and mapped_raw_status not in {
+        MonitoringStatus.RUNNING,
+        MonitoringStatus.ABORTED,
+        MonitoringStatus.NOT_RUN,
+    }:
         successful_units = sum(_attempt_succeeded(attempt) for attempt in selected)
         failed_units = len(selected) - successful_units
     else:
@@ -249,7 +293,7 @@ def run_from_row(
         failed_units = int(row.get("failed_units") or 0)
     return CollectorRun(
         collector_id=collector_id,
-        run_id=str(row["run_id"]),
+        run_id=UUID(str(row["run_id"])),
         scheduled_date=scheduled,
         started_at=as_utc(row["started_at"]),  # type: ignore[arg-type]
         completed_at=as_utc(row.get("completed_at")),  # type: ignore[arg-type]
@@ -271,7 +315,7 @@ def freshness_from_rows(
         FreshnessRecord(
             collector_id=collector_id,
             dataset_id=str(row["dataset_id"]),
-            latest_at=as_utc(row.get("latest_at")),  # type: ignore[arg-type]
+            latest_data_at=as_utc(row.get("latest_at")),  # type: ignore[arg-type]
         )
         for row in rows
     ]

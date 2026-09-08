@@ -6,34 +6,31 @@ import {
 } from 'lucide-react'
 
 import { Card, CardContent, CardHeader, CardTitle } from '../../../components/ui/card'
-import type { CollectorRun } from '../data/schema'
+import type { SummaryResponse } from '../data/schema'
 
-const incidentStatuses = new Set(['PARTIAL_FAILED', 'FAILED', 'ABORTED'])
-const healthyStatuses = new Set(['SUCCESS', 'SUCCESS_EMPTY'])
-
-export function KpiCards({ runs }: { runs: CollectorRun[] }) {
+export function KpiCards({ summary }: { summary?: SummaryResponse }) {
   const values = [
     {
       label: '전체 수집기',
-      value: runs.length,
+      value: summary?.registered_collectors ?? 0,
       icon: ActivityIcon,
       tone: 'text-primary bg-primary/10',
     },
     {
-      label: '정상',
-      value: runs.filter((run) => healthyStatuses.has(run.status)).length,
+      label: '오늘 정상',
+      value: summary?.today_success_runs ?? 0,
       icon: CheckCircle2Icon,
-      tone: 'text-positive bg-positive/10',
+      tone: 'text-positive-foreground bg-positive-surface',
     },
     {
-      label: '장애',
-      value: runs.filter((run) => incidentStatuses.has(run.status)).length,
+      label: '오늘 장애',
+      value: summary?.today_incident_runs ?? 0,
       icon: CircleAlertIcon,
       tone: 'text-destructive bg-destructive/10',
     },
     {
       label: '실행 중',
-      value: runs.filter((run) => run.status === 'RUNNING').length,
+      value: summary?.running_runs ?? 0,
       icon: LoaderCircleIcon,
       tone: 'text-muted-foreground bg-muted',
     },

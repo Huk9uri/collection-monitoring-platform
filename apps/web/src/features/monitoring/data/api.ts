@@ -6,21 +6,18 @@ import {
   collectorsResponseSchema,
   freshnessResponseSchema,
   runDetailResponseSchema,
+  runDetailConditionsSchema,
   runsResponseSchema,
   runsQueryConditionsSchema,
   summaryResponseSchema,
+  type RunDetailConditions,
   type RunsQueryConditions,
 } from './schema'
 
-export type { RunsQueryConditions } from './schema'
+export type { RunDetailConditions, RunsQueryConditions } from './schema'
 
 export interface FreshnessQueryConditions {
   collectorId?: string
-}
-
-export interface RunDetailConditions {
-  collectorId: string
-  runId: string
 }
 
 async function getParsed<T>(
@@ -55,9 +52,11 @@ export async function getRuns(conditions: RunsQueryConditions) {
   })
 }
 
-export function getRunDetail({ collectorId, runId }: RunDetailConditions) {
-  return getParsed(
-    `/api/v1/monitoring/runs/${encodeURIComponent(collectorId)}/${encodeURIComponent(runId)}`,
+export async function getRunDetail({ collectorId, runId }: RunDetailConditions) {
+  const validated = runDetailConditionsSchema.parse({ collectorId, runId })
+
+  return await getParsed(
+    `/api/v1/monitoring/runs/${encodeURIComponent(validated.collectorId)}/${encodeURIComponent(validated.runId)}`,
     runDetailResponseSchema,
   )
 }

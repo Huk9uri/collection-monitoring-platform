@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
@@ -12,7 +13,9 @@ from monitoring_api.adapters.base import CollectorRun, FreshnessRecord
 from monitoring_api.auth import require_role
 from monitoring_api.models import MonitoringStatus, Role
 from monitoring_api.services.monitoring import (
+    CollectorSummary,
     MonitoringService,
+    MonitoringSummary,
     RunPageResult,
     ServiceResult,
     UnknownCollectorError,
@@ -105,18 +108,18 @@ def _resolve_run_range(
     return started_from, started_to
 
 
-@router.get("/summary", response_model=ServiceResult[CollectorRun])
-def summary(service: MonitoringServiceDependency) -> ServiceResult[CollectorRun]:
-    """수집기별 최신 실행을 전체 상태 요약의 입력으로 반환한다."""
+@router.get("/summary", response_model=MonitoringSummary)
+def summary(service: MonitoringServiceDependency) -> MonitoringSummary:
+    """Asia/Seoul 오늘 실행 건수와 전체 유효 상태를 반환한다."""
 
-    return service.latest()
+    return service.summary()
 
 
-@router.get("/collectors", response_model=ServiceResult[CollectorRun])
-def collectors(service: MonitoringServiceDependency) -> ServiceResult[CollectorRun]:
-    """수집기별 최신 실행 상태를 반환한다."""
+@router.get("/collectors", response_model=ServiceResult[CollectorSummary])
+def collectors(service: MonitoringServiceDependency) -> ServiceResult[CollectorSummary]:
+    """수집기별 저장 이력과 정책 기반 현재 상태를 반환한다."""
 
-    return service.latest()
+    return service.collectors()
 
 
 @router.get("/runs", response_model=RunPageResult)
@@ -147,7 +150,7 @@ def runs(
 )
 def run_detail(
     collector_id: str,
-    run_id: str,
+    run_id: UUID,
     service: MonitoringServiceDependency,
 ) -> ServiceResult[CollectorRun]:
     """등록된 수집기의 단일 실행과 전체 시도 상세를 반환한다."""

@@ -1,6 +1,9 @@
 from pathlib import Path
+import tomllib
 
+import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from monitoring_api.config import Settings, get_settings
 from monitoring_api.main import create_app
@@ -122,6 +125,76 @@ def test_cors_allows_only_the_configured_origin_get_and_authorization_header() -
     assert response.headers["access-control-allow-methods"] == "GET"
     assert "Authorization" in response.headers["access-control-allow-headers"]
     assert "X-API-Key" not in response.headers["access-control-allow-headers"]
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "*",
+        "monitoring.example.internal",
+        "ftp://monitoring.example.internal",
+        "https://user@monitoring.example.internal",
+        "https://monitoring.example.internal:",
+        "https://monitoring.example.internal/path",
+        "https://monitoring.example.internal?debug=true",
+        "https://monitoring.example.internal#fragment",
+    ],
+)
+def test_settings_rejects_non_exact_http_cors_origins(origin: str) -> None:
+    with pytest.raises(ValidationError, match="CORS"):
+        Settings(cors_origins=(origin,), _env_file=None)
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "db_connect_timeout_seconds",
+        "db_query_timeout_seconds",
+        "source_timeout_seconds",
+    ],
+)
+def test_settings_requires_positive_timeouts(field_name: str) -> None:
+    with pytest.raises(ValidationError):
+        Settings(**{field_name: 0}, _env_file=None)
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"fcdaum_schedule_timezone": "Asia/Seoul"},
+        {"fcdaum_daily_scheduled_time": "10:00"},
+        {"hmr_schedule_timezone": "Asia/Seoul"},
+        {"hmr_daily_scheduled_time": "10:00"},
+    ],
+)
+def test_settings_requires_schedule_timezone_and_time_as_a_pair(
+    values: dict[str, str],
+) -> None:
+    with pytest.raises(ValidationError, match="함께"):
+        Settings(**values, _env_file=None)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("fcdaum_freshness_sla_minutes", "unknown=60"),
+        ("hmr_freshness_sla_minutes", "unknown=60"),
+    ],
+)
+def test_settings_rejects_unknown_freshness_dataset(
+    field_name: str, value: str
+) -> None:
+    with pytest.raises(ValidationError, match="데이터셋"):
+        Settings(**{field_name: value}, _env_file=None)
+
+
+def test_api_declares_tzdata_for_windows_zoneinfo() -> None:
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    dependencies = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"][
+        "dependencies"
+    ]
+
+    assert any(dependency.startswith("tzdata") for dependency in dependencies)
 
 
 def test_cors_rejects_unconfigured_origin_and_non_get_method() -> None:

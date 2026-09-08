@@ -73,12 +73,12 @@ def ensure_read_only_connection_string(connection_string: str) -> str:
     return ";".join(parts)
 
 
-def _default_connector(connection_string: str) -> Any:
+def _default_connector(connection_string: str, *, timeout: int) -> Any:
     try:
         import pyodbc
     except ImportError as exc:  # pragma: no cover - 배포 의존성 누락 경계
         raise RuntimeError("SQL Server 드라이버를 사용할 수 없습니다.") from exc
-    return pyodbc.connect(connection_string, autocommit=True)
+    return pyodbc.connect(connection_string, autocommit=True, timeout=timeout)
 
 
 class ReadOnlyRepository:
@@ -93,10 +93,16 @@ class ReadOnlyRepository:
         self,
         connection_string: str,
         *,
-        connector: Callable[[str], Any] | None = None,
+        connector: Callable[..., Any] | None = None,
+        connect_timeout_seconds: int = 5,
+        query_timeout_seconds: int = 30,
     ) -> None:
+        if connect_timeout_seconds <= 0 or query_timeout_seconds <= 0:
+            raise ValueError("DB timeout은 양수여야 합니다.")
         self._connection_string = ensure_read_only_connection_string(connection_string)
         self._connector = connector or _default_connector
+        self._connect_timeout_seconds = connect_timeout_seconds
+        self._query_timeout_seconds = query_timeout_seconds
 
     @staticmethod
     def _validate_select(sql: str) -> None:
@@ -118,8 +124,12 @@ class ReadOnlyRepository:
         """SELECT 결과를 SQL 별칭 기반 사전 목록으로 반환한다."""
 
         self._validate_select(sql)
-        connection = self._connector(self._connection_string)
+        connection = self._connector(
+            self._connection_string,
+            timeout=self._connect_timeout_seconds,
+        )
         try:
+            connection.timeout = self._query_timeout_seconds
             cursor = connection.cursor()
             try:
                 if parameters:

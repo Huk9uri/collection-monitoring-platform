@@ -17,14 +17,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apiClient } from '../../lib/api'
 import type {
   CollectorRun,
+  CollectorSummary,
   FreshnessRecord,
   SourceError,
+  SourceStatus,
+  SummaryResponse,
 } from './data/schema'
 import { MonitoringPage } from './monitoring-page'
 
 const successfulRun: CollectorRun = {
   collector_id: 'hmr',
-  run_id: 'run-success',
+  run_id: '00000000-0000-4000-8000-000000000001',
   scheduled_date: '2026-09-08',
   started_at: '2026-09-08T01:00:00Z',
   completed_at: '2026-09-08T01:03:00Z',
@@ -41,7 +44,7 @@ const successfulRun: CollectorRun = {
 const partialFailedRun: CollectorRun = {
   ...successfulRun,
   collector_id: 'fcdaum',
-  run_id: 'run-partial',
+  run_id: '00000000-0000-4000-8000-000000000002',
   status: 'PARTIAL_FAILED',
   successful_units: 1,
   failed_units: 1,
@@ -52,7 +55,8 @@ const partialFailedRun: CollectorRun = {
       attempt_no: 1,
       started_at: '2026-09-08T01:00:00Z',
       completed_at: '2026-09-08T01:01:00Z',
-      raw_status: 'SUCCESS',
+      outcome: 'SUCCESS',
+      raw_status: 'SUCCESS_WITH_DATA',
       source_count: 5,
       inserted_count: 2,
       changed_count: 1,
@@ -66,6 +70,7 @@ const partialFailedRun: CollectorRun = {
       attempt_no: 1,
       started_at: '2026-09-08T01:01:00Z',
       completed_at: '2026-09-08T01:02:00Z',
+      outcome: 'FAILED',
       raw_status: 'FAILED',
       source_count: 5,
       inserted_count: 0,
@@ -79,7 +84,7 @@ const partialFailedRun: CollectorRun = {
 
 const failedRun: CollectorRun = {
   ...successfulRun,
-  run_id: 'run-failed-on-later-unfiltered-page',
+  run_id: '00000000-0000-4000-8000-000000000003',
   status: 'FAILED',
   successful_units: 0,
   failed_units: 1,
@@ -89,12 +94,18 @@ const freshness: FreshnessRecord[] = [
   {
     collector_id: 'hmr',
     dataset_id: 'orders',
-    latest_at: '2026-09-08T01:05:00Z',
+    last_successful_check_at: '2026-09-08T01:05:00Z',
+    latest_data_at: '2026-09-08T00:55:00Z',
+    freshness_sla_minutes: 180,
+    freshness_overdue: false,
   },
   {
     collector_id: 'fcdaum',
     dataset_id: 'missions',
-    latest_at: null,
+    last_successful_check_at: '2026-09-08T01:03:00Z',
+    latest_data_at: null,
+    freshness_sla_minutes: 60,
+    freshness_overdue: true,
   },
 ]
 
@@ -104,10 +115,50 @@ const sourceError: SourceError = {
   message: '데이터 소스를 조회할 수 없습니다.',
 }
 
+const availableSourceStatus: SourceStatus = {
+  registered: 2,
+  succeeded: 2,
+  failed: 0,
+  all_sources_unavailable: false,
+}
+
+const baseSummary: SummaryResponse = {
+  overall_status: 'PARTIAL_FAILED',
+  registered_collectors: 2,
+  today_success_runs: 3,
+  today_incident_runs: 1,
+  running_runs: 0,
+  errors: [],
+  source_status: availableSourceStatus,
+}
+
+function toCollectorSummary(run: CollectorRun): CollectorSummary {
+  return {
+    collector_id: run.collector_id,
+    display_name: run.collector_id === 'hmr' ? 'HMR' : 'FC다움',
+    status: run.status,
+    latest_run: run,
+    schedule_timezone: 'Asia/Seoul',
+    daily_scheduled_time: '03:00:00',
+    max_duration_minutes: 120,
+    last_successful_check_at:
+      run.status === 'SUCCESS' || run.status === 'SUCCESS_EMPTY'
+        ? run.completed_at
+        : null,
+    latest_data_at: run.completed_at,
+    freshness_overdue: false,
+    freshness: freshness.filter(
+      (item) => item.collector_id === run.collector_id,
+    ),
+  }
+}
+
 interface ApiScenario {
   runs?: CollectorRun[]
-  freshness?: FreshnessRecord[]
+  collectors?: CollectorSummary[]
   errors?: SourceError[]
+  sourceStatus?: SourceStatus
+  summary?: SummaryResponse
   total?: number
   pending?: boolean
   rejectAll?: boolean
@@ -115,8 +166,33 @@ interface ApiScenario {
 
 function mockApi({
   runs = [successfulRun, partialFailedRun],
-  freshness: freshnessItems = freshness,
+  collectors = runs.map(toCollectorSummary),
   errors = [],
+  sourceStatus = errors.length > 0
+    ? {
+        registered: 2,
+        succeeded: 1,
+        failed: 1,
+        all_sources_unavailable: false,
+      }
+    : availableSourceStatus,
+  summary = {
+    ...baseSummary,
+    overall_status: runs.length === 0 ? 'NOT_RUN' : baseSummary.overall_status,
+    registered_collectors: collectors.length,
+    today_success_runs: runs.filter(
+      (run) => run.status === 'SUCCESS' || run.status === 'SUCCESS_EMPTY',
+    ).length,
+    today_incident_runs: runs.filter(
+      (run) =>
+        run.status === 'PARTIAL_FAILED' ||
+        run.status === 'FAILED' ||
+        run.status === 'ABORTED',
+    ).length,
+    running_runs: runs.filter((run) => run.status === 'RUNNING').length,
+    errors,
+    source_status: sourceStatus,
+  },
   total = runs.length,
   pending = false,
   rejectAll = false,
@@ -135,13 +211,19 @@ function mockApi({
     const serverRuns = requestedStatus
       ? runs.filter((run) => run.status === requestedStatus)
       : runs
-    const data = url.endsWith('/freshness')
-      ? { items: freshnessItems, errors }
+    const data = url.endsWith('/summary')
+      ? summary
+      : url.endsWith('/collectors')
+        ? { items: collectors, errors, source_status: sourceStatus }
       : url.endsWith('/runs')
-        ? { items: serverRuns, errors, total }
+        ? { items: serverRuns, errors, source_status: sourceStatus, total }
         : url.includes('/runs/')
-          ? { items: [partialFailedRun], errors: [] }
-          : { items: runs, errors }
+          ? {
+              items: [partialFailedRun],
+              errors: [],
+              source_status: availableSourceStatus,
+            }
+          : undefined
 
     return { data } as never
   })
@@ -206,38 +288,55 @@ describe('MonitoringPage', () => {
 
   it('필수 초기 조회는 서로 다른 순서로 완료되어도 모두 settled될 때까지 로딩을 유지한다', async () => {
     const collectors = deferred<never>()
-    const freshnessResult = deferred<never>()
     const runs = deferred<never>()
     vi.spyOn(apiClient, 'get').mockImplementation(async (path) => {
       const url = String(path)
       if (url.endsWith('/summary')) {
-        return { data: { items: [], errors: [] } } as never
+        return {
+          data: {
+            ...baseSummary,
+            overall_status: 'NOT_RUN',
+            registered_collectors: 0,
+            today_success_runs: 0,
+            today_incident_runs: 0,
+            running_runs: 0,
+          },
+        } as never
       }
       if (url.endsWith('/collectors')) return collectors.promise
-      if (url.endsWith('/freshness')) return freshnessResult.promise
       return runs.promise
     })
     renderPage()
 
     await waitFor(() => {
-      expect(apiClient.get).toHaveBeenCalledTimes(4)
+      expect(apiClient.get).toHaveBeenCalledTimes(3)
     })
     expect(screen.getByRole('status', {
       name: '모니터링 데이터를 불러오는 중입니다.',
     })).toBeTruthy()
 
     await act(async () => {
-      collectors.resolve({ data: { items: [], errors: [] } } as never)
-    })
-    await act(async () => {
-      freshnessResult.resolve({ data: { items: [], errors: [] } } as never)
+      collectors.resolve({
+        data: {
+          items: [],
+          errors: [],
+          source_status: availableSourceStatus,
+        },
+      } as never)
     })
     expect(screen.getByRole('status', {
       name: '모니터링 데이터를 불러오는 중입니다.',
     })).toBeTruthy()
 
     await act(async () => {
-      runs.resolve({ data: { items: [], errors: [], total: 0 } } as never)
+      runs.resolve({
+        data: {
+          items: [],
+          errors: [],
+          source_status: availableSourceStatus,
+          total: 0,
+        },
+      } as never)
     })
     expect(await screen.findByRole('status', {
       name: '표시할 모니터링 데이터가 없습니다.',
@@ -245,7 +344,7 @@ describe('MonitoringPage', () => {
   })
 
   it('모든 조회 결과가 비어 있으면 빈 결과 상태를 표시한다', async () => {
-    mockApi({ runs: [], freshness: [] })
+    mockApi({ runs: [] })
     renderPage()
 
     expect(
@@ -278,17 +377,86 @@ describe('MonitoringPage', () => {
     expect(screen.getByRole('main')).toBeTruthy()
   })
 
+  it.each([
+    {
+      name: '등록된 두 소스가 모두 실패',
+      sourceStatus: {
+        registered: 2,
+        succeeded: 0,
+        failed: 2,
+        all_sources_unavailable: true,
+      },
+      errors: [sourceError],
+    },
+    {
+      name: '등록 소스 없음',
+      sourceStatus: {
+        registered: 0,
+        succeeded: 0,
+        failed: 0,
+        all_sources_unavailable: true,
+      },
+      errors: [],
+    },
+  ])('$name이면 HTTP 200이어도 전체 오류를 표시한다', async ({ sourceStatus, errors }) => {
+    mockApi({
+      runs: [],
+      collectors: [],
+      errors,
+      sourceStatus,
+      summary: {
+        overall_status: 'NOT_RUN',
+        registered_collectors: sourceStatus.registered,
+        today_success_runs: 0,
+        today_incident_runs: 0,
+        running_runs: 0,
+        errors,
+        source_status: sourceStatus,
+      },
+    })
+    renderPage()
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('모니터링 데이터를 불러오지 못했습니다.')
+    expect(alert.textContent).not.toContain('일부 데이터를')
+  })
+
   it('KPI와 수집기·신선도·실행 이력에 실제 조회 결과를 표시한다', async () => {
-    mockApi()
+    mockApi({ summary: baseSummary })
     renderPage()
 
     const kpis = await screen.findByRole('region', { name: '전체 현황' })
-    expect(kpis.textContent).toContain('전체 수집기')
-    expect(kpis.textContent).toContain('장애')
+    expect(kpis.textContent).toContain('전체 수집기2')
+    expect(kpis.textContent).toContain('오늘 정상3')
+    expect(kpis.textContent).toContain('오늘 장애1')
     expect(screen.getByRole('article', { name: 'HMR 최신 상태' })).toBeTruthy()
     expect(screen.getByRole('article', { name: 'FC다움 최신 상태' })).toBeTruthy()
     expect(screen.getByRole('table', { name: '데이터 신선도' })).toBeTruthy()
+    expect(screen.getByText('마지막 성공 확인')).toBeTruthy()
+    expect(screen.getByText('최신 데이터 시각')).toBeTruthy()
+    expect(screen.getByText('SLA 초과')).toBeTruthy()
     expect(screen.getByRole('table', { name: '수집 실행 이력' })).toBeTruthy()
+  })
+
+  it('수집기 snapshot의 중첩 신선도를 표시하고 freshness endpoint는 호출하지 않는다', async () => {
+    const snapshotFreshness: FreshnessRecord = {
+      ...freshness[0]!,
+      dataset_id: 'collector-snapshot',
+    }
+    const collector = {
+      ...toCollectorSummary(successfulRun),
+      freshness: [snapshotFreshness],
+    }
+    const request = mockApi({
+      collectors: [collector],
+    })
+
+    renderPage()
+
+    expect(await screen.findByText('collector-snapshot')).toBeTruthy()
+    expect(
+      request.mock.calls.some(([path]) => String(path).endsWith('/freshness')),
+    ).toBe(false)
   })
 
   it('URL의 날짜·수집기·상태·페이지를 조회와 화면 필터에 적용한다', async () => {
@@ -315,8 +483,8 @@ describe('MonitoringPage', () => {
       'value',
       'PARTIAL_FAILED',
     )
-    expect(screen.queryByText('run-success')).toBeNull()
-    expect(screen.getByText('run-partial')).toBeTruthy()
+    expect(screen.queryByText(successfulRun.run_id)).toBeNull()
+    expect(screen.getByText(partialFailedRun.run_id)).toBeTruthy()
     expect(request).toHaveBeenCalledWith('/api/v1/monitoring/runs', {
       params: {
         collector_id: 'fcdaum',
@@ -329,34 +497,129 @@ describe('MonitoringPage', () => {
     })
   })
 
+  it('형식이 잘못된 URL 날짜를 제거하고 필드 오류를 표시하며 실행 조회를 막는다', async () => {
+    window.history.replaceState(null, '', '/?from=2026-02-31&collector=hmr')
+    const request = mockApi()
+    renderPage()
+
+    expect(await screen.findByText('올바른 조회 시작일을 입력해 주세요.')).toBeTruthy()
+    await waitFor(() => {
+      const search = new URLSearchParams(window.location.search)
+      expect(search.get('from')).toBeNull()
+      expect(search.get('collector')).toBe('hmr')
+    })
+    expect(screen.getByLabelText('조회 시작일')).toHaveProperty('value', '')
+    expect(
+      request.mock.calls.some(([path]) => String(path).endsWith('/runs')),
+    ).toBe(false)
+  })
+
+  it('역전된 날짜 범위를 입력 옆에서 알리고 실행 조회를 보내지 않는다', async () => {
+    window.history.replaceState(
+      null,
+      '',
+      '/?from=2026-09-09&to=2026-09-08',
+    )
+    const request = mockApi()
+    renderPage()
+
+    expect(
+      await screen.findByText('조회 종료일은 시작일보다 빠를 수 없습니다.'),
+    ).toBeTruthy()
+    expect(screen.getByLabelText('조회 종료일').getAttribute('aria-invalid')).toBe(
+      'true',
+    )
+    expect(
+      request.mock.calls.some(([path]) => String(path).endsWith('/runs')),
+    ).toBe(false)
+  })
+
+  it('93일을 초과한 날짜 범위를 입력 옆에서 알리고 실행 조회를 보내지 않는다', async () => {
+    window.history.replaceState(
+      null,
+      '',
+      '/?from=2026-06-01&to=2026-09-09',
+    )
+    const request = mockApi()
+    renderPage()
+
+    expect(await screen.findByText('조회 기간은 최대 93일입니다.')).toBeTruthy()
+    expect(
+      request.mock.calls.some(([path]) => String(path).endsWith('/runs')),
+    ).toBe(false)
+  })
+
+  it('초기 URL의 과도한 페이지를 서버 최대 페이지로 즉시 정규화한다', async () => {
+    window.history.replaceState(null, '', '/?page=999')
+    mockApi({ total: 20_000 })
+    renderPage()
+
+    await screen.findByRole('table', { name: '수집 실행 이력' })
+    expect(new URLSearchParams(window.location.search).get('page')).toBe('501')
+    expect(screen.getByText(/501\/501 페이지/)).toBeTruthy()
+  })
+
+  it('popstate로 복원된 URL도 화면 상태와 같은 canonical 값으로 교체한다', async () => {
+    mockApi({ total: 20_000 })
+    renderPage()
+    await screen.findByRole('table', { name: '수집 실행 이력' })
+
+    act(() => {
+      window.history.pushState(null, '', '/?page=999&from=invalid')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+
+    expect(await screen.findByText('올바른 조회 시작일을 입력해 주세요.')).toBeTruthy()
+    await waitFor(() => {
+      const search = new URLSearchParams(window.location.search)
+      expect(search.get('page')).toBe('501')
+      expect(search.get('from')).toBeNull()
+    })
+    expect(screen.getByLabelText('조회 시작일')).toHaveProperty('value', '')
+  })
+
   it('상태 필터를 서버 페이지네이션 전에 적용해 뒤 페이지의 일치 실행을 찾는다', async () => {
     window.history.replaceState(null, '', '/?status=FAILED')
     const firstUnfilteredPage = Array.from({ length: 20 }, (_, index) => ({
       ...successfulRun,
-      run_id: `run-success-${index}`,
+      run_id: `00000000-0000-4000-8000-${String(index + 10).padStart(12, '0')}`,
     }))
     const request = vi.spyOn(apiClient, 'get').mockImplementation(
       async (path, config) => {
         const url = String(path)
         const params = config?.params as Record<string, unknown> | undefined
-        if (url.endsWith('/freshness')) {
-          return { data: { items: freshness, errors: [] } } as never
-        }
         if (url.endsWith('/runs')) {
           return {
             data:
               params?.status === 'FAILED'
-                ? { items: [failedRun], errors: [], total: 1 }
-                : { items: firstUnfilteredPage, errors: [], total: 21 },
+                ? {
+                    items: [failedRun],
+                    errors: [],
+                    source_status: availableSourceStatus,
+                    total: 1,
+                  }
+                : {
+                    items: firstUnfilteredPage,
+                    errors: [],
+                    source_status: availableSourceStatus,
+                    total: 21,
+                  },
           } as never
         }
-        return { data: { items: [successfulRun], errors: [] } } as never
+        if (url.endsWith('/summary')) return { data: baseSummary } as never
+        return {
+          data: {
+            items: [toCollectorSummary(successfulRun)],
+            errors: [],
+            source_status: availableSourceStatus,
+          },
+        } as never
       },
     )
     renderPage()
 
     expect(await screen.findByText(failedRun.run_id)).toBeTruthy()
-    expect(screen.queryByText('run-success-0')).toBeNull()
+    expect(screen.queryByText(firstUnfilteredPage[0]!.run_id)).toBeNull()
     expect(request).toHaveBeenCalledWith('/api/v1/monitoring/runs', {
       params: expect.objectContaining({ status: 'FAILED', offset: 0 }),
     })
@@ -429,15 +692,20 @@ describe('MonitoringPage', () => {
     expect(nextPage).toHaveProperty('disabled', true)
   })
 
-  it('새로고침은 monitoring query만 수동으로 invalidate한다', async () => {
-    mockApi()
+  it('새로고침은 summary·collectors·runs 세 화면 조회만 다시 실행한다', async () => {
+    const request = mockApi()
     const { queryClient } = renderPage()
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries')
     await screen.findByRole('table', { name: '수집 실행 이력' })
+    request.mockClear()
 
     fireEvent.click(screen.getByRole('button', { name: '새로고침' }))
 
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['monitoring'] })
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(3))
+    expect(
+      request.mock.calls.map(([path]) => String(path).split('/').at(-1)).sort(),
+    ).toEqual(['collectors', 'runs', 'summary'])
   })
 
   it('실행을 선택하면 상세를 조회해 서울 시각과 하위 작업을 표시한다', async () => {
@@ -446,14 +714,16 @@ describe('MonitoringPage', () => {
     await screen.findByRole('table', { name: '수집 실행 이력' })
 
     fireEvent.click(
-      screen.getByRole('button', { name: '실행 run-partial 상세 보기' }),
+      screen.getByRole('button', {
+        name: `실행 ${partialFailedRun.run_id} 상세 보기`,
+      }),
     )
 
     const dialog = await screen.findByRole('dialog', { name: '실행 상세' })
     expect(await within(dialog).findByText('한촌설렁탕')).toBeTruthy()
     expect(within(dialog).getByText('2026. 9. 8. 10:00')).toBeTruthy()
     expect(request).toHaveBeenCalledWith(
-      '/api/v1/monitoring/runs/fcdaum/run-partial',
+      `/api/v1/monitoring/runs/fcdaum/${partialFailedRun.run_id}`,
       undefined,
     )
   })

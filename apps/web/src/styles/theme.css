@@ -20,6 +20,8 @@
   --input: #dcdfe3;
   --ring: #7983bd;
   --positive: #24993e;
+  --positive-foreground: #166b2c;
+  --positive-surface: #e9f5ec;
   --warning: #f8b114;
   --sidebar: var(--background);
   --sidebar-foreground: var(--foreground);
@@ -52,6 +54,8 @@
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.551 0.027 264.364);
   --positive: oklch(0.723 0.191 149.579);
+  --positive-foreground: #a8efbb;
+  --positive-surface: #173f28;
   --warning: oklch(0.795 0.184 86.047);
 }
 
@@ -80,6 +84,8 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
   --color-positive: var(--positive);
+  --color-positive-foreground: var(--positive-foreground);
+  --color-positive-surface: var(--positive-surface);
   --color-warning: var(--warning);
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);

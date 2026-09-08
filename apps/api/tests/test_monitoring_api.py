@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
 from typing import NoReturn
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,6 +14,10 @@ from monitoring_api.auth import CurrentUser, get_current_user
 from monitoring_api.main import create_app
 from monitoring_api.models import MonitoringStatus
 from monitoring_api.services.monitoring import MonitoringService
+
+
+RUN_ID = UUID("11111111-1111-4111-8111-111111111111")
+MISSING_RUN_ID = UUID("99999999-9999-4999-8999-999999999999")
 
 
 class AvailableAdapter:
@@ -25,7 +30,7 @@ class AvailableAdapter:
     def _run(self) -> CollectorRun:
         return CollectorRun(
             collector_id=self.collector_id,
-            run_id="run-ok",
+            run_id=RUN_ID,
             scheduled_date=date(2026, 9, 8),
             started_at=datetime(2026, 9, 8, 1, tzinfo=UTC),
             completed_at=datetime(2026, 9, 8, 1, 1, tzinfo=UTC),
@@ -48,15 +53,24 @@ class AvailableAdapter:
     def count_runs(self, **_: object) -> int:
         return 1
 
-    def get_run(self, run_id: str) -> CollectorRun | None:
-        return self._run() if run_id == "run-ok" else None
+    def count_runs_by_status(
+        self, *, started_from: datetime, started_to: datetime
+    ) -> dict[MonitoringStatus, int]:
+        del started_from, started_to
+        return {MonitoringStatus.SUCCESS: 1}
+
+    def latest_successful_check_at(self) -> datetime | None:
+        return datetime(2026, 9, 8, 1, 1, tzinfo=UTC)
+
+    def get_run(self, run_id: UUID) -> CollectorRun | None:
+        return self._run() if run_id == RUN_ID else None
 
     def freshness(self) -> list[FreshnessRecord]:
         return [
             FreshnessRecord(
                 collector_id=self.collector_id,
                 dataset_id="orders",
-                latest_at=datetime(2026, 9, 8, 1, tzinfo=UTC),
+                latest_data_at=datetime(2026, 9, 8, 1, tzinfo=UTC),
             )
         ]
 
@@ -81,7 +95,13 @@ class UnavailableAdapter(AvailableAdapter):
         del conditions
         self._fail()
 
-    def get_run(self, run_id: str) -> CollectorRun | None:
+    def count_runs_by_status(
+        self, *, started_from: datetime, started_to: datetime
+    ) -> dict[MonitoringStatus, int]:
+        del started_from, started_to
+        self._fail()
+
+    def get_run(self, run_id: UUID) -> CollectorRun | None:
         del run_id
         self._fail()
 
@@ -116,7 +136,9 @@ class ManyRunsAdapter(AvailableAdapter):
             self._run().model_copy(
                 update={
                     "collector_id": self.collector_id,
-                    "run_id": f"{self.collector_id}-{index}",
+                    "run_id": uuid5(
+                        NAMESPACE_URL, f"{self.collector_id}-{index}"
+                    ),
                     "started_at": base
                     - timedelta(minutes=(index * 2) + self.minute_offset),
                 }
@@ -163,15 +185,16 @@ def test_monitoring_get_routes_expose_service_results(client: TestClient) -> Non
         "summary": client.get("/api/v1/monitoring/summary"),
         "collectors": client.get("/api/v1/monitoring/collectors"),
         "runs": client.get("/api/v1/monitoring/runs"),
-        "detail": client.get("/api/v1/monitoring/runs/available/run-ok"),
+        "detail": client.get(f"/api/v1/monitoring/runs/available/{RUN_ID}"),
         "freshness": client.get("/api/v1/monitoring/freshness"),
     }
 
     assert all(response.status_code == 200 for response in responses.values())
-    assert responses["summary"].json()["items"][0]["run_id"] == "run-ok"
+    assert responses["summary"].json()["today_success_runs"] == 1
+    assert responses["summary"].json()["registered_collectors"] == 1
     assert responses["collectors"].json()["items"][0]["collector_id"] == "available"
     assert responses["runs"].json()["items"][0]["status"] == "SUCCESS"
-    assert responses["detail"].json()["items"][0]["run_id"] == "run-ok"
+    assert responses["detail"].json()["items"][0]["run_id"] == str(RUN_ID)
     assert responses["freshness"].json()["items"][0]["dataset_id"] == "orders"
     assert all(response.json()["errors"] == [] for response in responses.values())
 
@@ -339,7 +362,7 @@ def test_run_range_overflow_is_a_safe_422(
     "path",
     [
         "/api/v1/monitoring/runs?collector_id=unknown",
-        "/api/v1/monitoring/runs/unknown/run-ok",
+        f"/api/v1/monitoring/runs/unknown/{RUN_ID}",
         "/api/v1/monitoring/freshness?collector_id=unknown",
     ],
 )
@@ -351,24 +374,39 @@ def test_unknown_collector_returns_safe_404(client: TestClient, path: str) -> No
 
 
 def test_missing_run_returns_safe_404(client: TestClient) -> None:
-    response = client.get("/api/v1/monitoring/runs/available/missing")
+    response = client.get(f"/api/v1/monitoring/runs/available/{MISSING_RUN_ID}")
 
     assert response.status_code == 404
     assert response.json() == {"detail": "실행 이력을 찾을 수 없습니다."}
+
+
+def test_malformed_run_id_returns_422_before_adapter_access(client: TestClient) -> None:
+    response = client.get("/api/v1/monitoring/runs/available/not-a-uuid")
+
+    assert response.status_code == 422
 
 
 def test_source_failure_returns_200_partial_response_without_sensitive_details(
     client: TestClient,
 ) -> None:
     paths = [
-        ("/api/v1/monitoring/summary", "available"),
         ("/api/v1/monitoring/collectors", "available"),
         ("/api/v1/monitoring/runs", "available"),
         ("/api/v1/monitoring/freshness", "available"),
     ]
     service = MonitoringService([AvailableAdapter(), UnavailableAdapter()])
     with use_service(client, service):
+        summary_response = client.get("/api/v1/monitoring/summary")
         responses = [(client.get(path), expected_id) for path, expected_id in paths]
+
+    assert summary_response.status_code == 200
+    assert summary_response.json()["source_status"] == {
+        "registered": 2,
+        "succeeded": 1,
+        "failed": 1,
+        "all_sources_unavailable": False,
+    }
+    assert summary_response.json()["errors"][0]["collector_id"] == "unavailable"
 
     for response, expected_id in responses:
         body = response.json()
@@ -391,7 +429,7 @@ def test_source_failure_returns_200_partial_response_without_sensitive_details(
 def test_run_detail_source_failure_returns_safe_200_error(client: TestClient) -> None:
     service = MonitoringService([UnavailableAdapter()])
     with use_service(client, service):
-        response = client.get("/api/v1/monitoring/runs/unavailable/run-ok")
+        response = client.get(f"/api/v1/monitoring/runs/unavailable/{RUN_ID}")
 
     serialized = response.text.casefold()
     assert response.status_code == 200
@@ -403,12 +441,27 @@ def test_run_detail_source_failure_returns_safe_200_error(client: TestClient) ->
     assert "private-db" not in serialized
 
 
+@pytest.mark.parametrize(
+    "service",
+    [MonitoringService([UnavailableAdapter()]), MonitoringService([])],
+)
+def test_collectors_exposes_total_source_unavailability(
+    client: TestClient, service: MonitoringService
+) -> None:
+    with use_service(client, service):
+        response = client.get("/api/v1/monitoring/collectors")
+
+    assert response.status_code == 200
+    assert response.json()["source_status"]["all_sources_unavailable"] is True
+    assert response.json()["source_status"]["succeeded"] == 0
+
+
 def test_every_monitoring_route_requires_viewer_role(client: TestClient) -> None:
     paths = [
         "/api/v1/monitoring/summary",
         "/api/v1/monitoring/collectors",
         "/api/v1/monitoring/runs",
-        "/api/v1/monitoring/runs/available/run-ok",
+        f"/api/v1/monitoring/runs/available/{RUN_ID}",
         "/api/v1/monitoring/freshness",
     ]
     client.app.dependency_overrides[get_current_user] = lambda: CurrentUser(
@@ -455,6 +508,13 @@ def test_monitoring_openapi_declares_only_get_operations() -> None:
     assert status_parameter["schema"]["anyOf"][0]["$ref"].endswith(
         "/MonitoringStatus"
     )
+    detail_parameters = monitoring_paths[
+        "/api/v1/monitoring/runs/{collector_id}/{run_id}"
+    ]["get"]["parameters"]
+    run_id_parameter = next(
+        parameter for parameter in detail_parameters if parameter["name"] == "run_id"
+    )
+    assert run_id_parameter["schema"]["format"] == "uuid"
 
 
 @pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])

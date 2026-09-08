@@ -6,12 +6,14 @@ import json
 from collections import defaultdict
 from datetime import datetime
 from typing import Protocol
+from uuid import UUID
 
 from monitoring_api.adapters.base import (
     CollectorAttempt,
     CollectorRun,
     FreshnessRecord,
     attempt_from_row,
+    as_utc,
     freshness_from_rows,
     run_from_row,
     to_sql_datetime,
@@ -132,6 +134,21 @@ FROM dbo.FC_DAUM_COLLECTION_RUN AS runs
 WHERE (? IS NULL OR runs.StartedAt >= ?)
   AND (? IS NULL OR runs.StartedAt <= ?)
   AND (? IS NULL OR {_FCDAUM_CANONICAL_STATUS_SQL} = ?)"""
+
+FCDAUM_STATUS_COUNTS_SQL = f"""SELECT canonical_status AS status, COUNT_BIG(*) AS total
+FROM (
+    SELECT {_FCDAUM_CANONICAL_STATUS_SQL} AS canonical_status
+    FROM dbo.FC_DAUM_COLLECTION_RUN AS runs
+    WHERE runs.StartedAt >= ? AND runs.StartedAt < ?
+) AS daily_runs
+GROUP BY canonical_status"""
+
+FCDAUM_LATEST_SUCCESS_SQL = f"""SELECT TOP (1)
+    runs.FinishedAt AS last_successful_check_at
+FROM dbo.FC_DAUM_COLLECTION_RUN AS runs
+WHERE runs.FinishedAt IS NOT NULL
+  AND {_FCDAUM_CANONICAL_STATUS_SQL} IN ('SUCCESS', 'SUCCESS_EMPTY', 'WARNING')
+ORDER BY runs.FinishedAt DESC, CONVERT(char(36), runs.RunId) DESC"""
 
 FCDAUM_RUN_SQL = f"""SELECT
 {_FCDAUM_RUN_COLUMNS}
@@ -277,8 +294,26 @@ class FcDaumAdapter:
         )
         return int(rows[0]["total"]) if rows else 0
 
-    def get_run(self, run_id: str) -> CollectorRun | None:
-        runs = self._runs(self._repository.fetch_all(FCDAUM_RUN_SQL, (run_id,)))
+    def count_runs_by_status(
+        self, *, started_from: datetime, started_to: datetime
+    ) -> dict[MonitoringStatus, int]:
+        rows = self._repository.fetch_all(
+            FCDAUM_STATUS_COUNTS_SQL,
+            (to_sql_datetime(started_from), to_sql_datetime(started_to)),
+        )
+        return {
+            MonitoringStatus(str(row["status"])): int(row["total"])
+            for row in rows
+        }
+
+    def latest_successful_check_at(self) -> datetime | None:
+        rows = self._repository.fetch_all(FCDAUM_LATEST_SUCCESS_SQL)
+        if not rows:
+            return None
+        return as_utc(rows[0].get("last_successful_check_at"))  # type: ignore[arg-type]
+
+    def get_run(self, run_id: UUID) -> CollectorRun | None:
+        runs = self._runs(self._repository.fetch_all(FCDAUM_RUN_SQL, (str(run_id),)))
         return runs[0] if runs else None
 
     def freshness(self) -> list[FreshnessRecord]:

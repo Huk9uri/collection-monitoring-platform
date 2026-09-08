@@ -21,6 +21,7 @@ import {
   MAX_RUNS_PAGE,
   RUNS_PAGE_SIZE,
   RunsTable,
+  type RunFilterErrors,
   type RunFilters,
 } from './components/runs-table'
 import { monitoringQueries } from './data/queries'
@@ -28,10 +29,12 @@ import {
   monitoringStatusSchema,
   type CollectorRun,
   type SourceError,
+  type SourceStatus,
 } from './data/schema'
 
 interface MonitoringUrlState {
   filters: RunFilters
+  filterErrors: RunFilterErrors
   page: number
 }
 
@@ -40,29 +43,70 @@ interface SelectedRun {
   runId: string
 }
 
-function validDateInput(value: string | null) {
-  if (value === null || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return ''
+const MAX_RUN_RANGE_MILLISECONDS = 93 * 24 * 60 * 60 * 1_000
+
+function parseDateInput(
+  value: string | null,
+  label: '시작일' | '종료일',
+) {
+  if (value === null || value === '') {
+    return { value: '' }
   }
 
   const parsed = new Date(`${value}T00:00:00Z`)
-  return !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value
-    ? value
-    : ''
+  if (
+    /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+    !Number.isNaN(parsed.valueOf()) &&
+    parsed.toISOString().slice(0, 10) === value
+  ) {
+    return { value }
+  }
+
+  return {
+    value: '',
+    error: `올바른 조회 ${label}을 입력해 주세요.`,
+  }
+}
+
+function validateDateRange(
+  filters: RunFilters,
+  initialErrors: RunFilterErrors = {},
+): RunFilterErrors {
+  const errors = { ...initialErrors }
+  if (errors.from || errors.to || !filters.from || !filters.to) {
+    return errors
+  }
+
+  const startedFrom = Date.parse(`${filters.from}T00:00:00.000+09:00`)
+  const startedTo = Date.parse(`${filters.to}T23:59:59.999+09:00`)
+  const range = startedTo - startedFrom
+  if (range < 0) {
+    errors.to = '조회 종료일은 시작일보다 빠를 수 없습니다.'
+  } else if (range > MAX_RUN_RANGE_MILLISECONDS) {
+    errors.to = '조회 기간은 최대 93일입니다.'
+  }
+  return errors
 }
 
 function readUrlState(): MonitoringUrlState {
   const params = new URLSearchParams(window.location.search)
   const parsedStatus = monitoringStatusSchema.safeParse(params.get('status'))
   const requestedPage = Number(params.get('page'))
+  const from = parseDateInput(params.get('from'), '시작일')
+  const to = parseDateInput(params.get('to'), '종료일')
+  const filters: RunFilters = {
+    from: from.value,
+    to: to.value,
+    collector: params.get('collector') ?? '',
+    status: parsedStatus.success ? parsedStatus.data : '',
+  }
+  const initialErrors: RunFilterErrors = {}
+  if (from.error) initialErrors.from = from.error
+  if (to.error) initialErrors.to = to.error
 
   return {
-    filters: {
-      from: validDateInput(params.get('from')),
-      to: validDateInput(params.get('to')),
-      collector: params.get('collector') ?? '',
-      status: parsedStatus.success ? parsedStatus.data : '',
-    },
+    filters,
+    filterErrors: validateDateRange(filters, initialErrors),
     page:
       Number.isInteger(requestedPage) && requestedPage > 0
         ? Math.min(requestedPage, MAX_RUNS_PAGE)
@@ -89,6 +133,12 @@ function writeUrlState(state: MonitoringUrlState, replace = false) {
   }
 }
 
+function readCanonicalUrlState() {
+  const state = readUrlState()
+  writeUrlState(state, true)
+  return state
+}
+
 function seoulDayBoundary(value: string, endOfDay: boolean) {
   if (!value) return undefined
   const time = endOfDay ? '23:59:59.999' : '00:00:00.000'
@@ -101,15 +151,26 @@ function collectSourceErrors(
   return responses.flatMap((response) => response.data?.errors ?? [])
 }
 
+function hasAvailableSource(
+  responses: Array<{ data?: { source_status: SourceStatus } }>,
+) {
+  return responses.some(
+    (response) =>
+      response.data !== undefined &&
+      response.data.source_status.succeeded > 0 &&
+      !response.data.source_status.all_sources_unavailable,
+  )
+}
+
 export function MonitoringPage() {
   const queryClient = useQueryClient()
-  const [urlState, setUrlState] = useState(readUrlState)
+  const [urlState, setUrlState] = useState(readCanonicalUrlState)
   const [selectedRun, setSelectedRun] = useState<SelectedRun | null>(null)
   const [initialQueriesSettled, setInitialQueriesSettled] = useState(false)
   const isFetching = useIsFetching({ queryKey: ['monitoring'] }) > 0
 
   useEffect(() => {
-    const onPopState = () => setUrlState(readUrlState())
+    const onPopState = () => setUrlState(readCanonicalUrlState())
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
   }, [])
@@ -128,8 +189,11 @@ export function MonitoringPage() {
 
   const summaryQuery = useQuery(monitoringQueries.summary())
   const collectorsQuery = useQuery(monitoringQueries.collectors())
-  const freshnessQuery = useQuery(monitoringQueries.freshness({}))
-  const runsQuery = useQuery(monitoringQueries.runs(runConditions))
+  const datesAreValid = Object.keys(urlState.filterErrors).length === 0
+  const runsQuery = useQuery({
+    ...monitoringQueries.runs(runConditions),
+    enabled: datesAreValid,
+  })
   const detailConditions = selectedRun ?? { collectorId: '', runId: '' }
   const detailQuery = useQuery({
     ...monitoringQueries.runDetail(detailConditions),
@@ -139,28 +203,37 @@ export function MonitoringPage() {
   const primaryQueries = [
     summaryQuery,
     collectorsQuery,
-    freshnessQuery,
     runsQuery,
   ]
-  const allPrimaryQueriesSettled = primaryQueries.every(
+  const activePrimaryQueries = datesAreValid
+    ? primaryQueries
+    : [summaryQuery, collectorsQuery]
+  const allPrimaryQueriesSettled = activePrimaryQueries.every(
     (query) => !query.isPending,
   )
-  const initialLoading =
-    !initialQueriesSettled && !allPrimaryQueriesSettled
-  const allFailed = primaryQueries.every((query) => query.isError)
+  const initialLoading = !initialQueriesSettled && !allPrimaryQueriesSettled
+  const allFailed = activePrimaryQueries.every((query) => query.isError)
   const sourceErrors = collectSourceErrors(primaryQueries)
+  const hasSourceMetadata = activePrimaryQueries.some(
+    (query) => query.data !== undefined,
+  )
+  const allSourcesUnavailable =
+    allFailed ||
+    (hasSourceMetadata && !hasAvailableSource(activePrimaryQueries))
   const failedAreas = [
     summaryQuery.isError ? '전체 현황' : null,
     collectorsQuery.isError ? '수집기 현황' : null,
-    freshnessQuery.isError ? '데이터 신선도' : null,
-    runsQuery.isError ? '실행 이력' : null,
+    datesAreValid && runsQuery.isError ? '실행 이력' : null,
   ].filter((area): area is string => area !== null)
   const allEmpty =
-    !primaryQueries.some((query) => query.isError) &&
+    datesAreValid &&
+    !activePrimaryQueries.some((query) => query.isError) &&
     sourceErrors.length === 0 &&
-    (summaryQuery.data?.items.length ?? 0) === 0 &&
+    (summaryQuery.data?.registered_collectors ?? 0) === 0 &&
+    (summaryQuery.data?.today_success_runs ?? 0) === 0 &&
+    (summaryQuery.data?.today_incident_runs ?? 0) === 0 &&
+    (summaryQuery.data?.running_runs ?? 0) === 0 &&
     (collectorsQuery.data?.items.length ?? 0) === 0 &&
-    (freshnessQuery.data?.items.length ?? 0) === 0 &&
     (runsQuery.data?.items.length ?? 0) === 0
 
   useEffect(() => {
@@ -193,7 +266,11 @@ export function MonitoringPage() {
   }
 
   function changeFilters(filters: RunFilters) {
-    commitUrlState({ filters, page: 1 })
+    commitUrlState({
+      filters,
+      filterErrors: validateDateRange(filters),
+      page: 1,
+    })
   }
 
   function changePage(page: number) {
@@ -215,12 +292,14 @@ export function MonitoringPage() {
       ].map((run) => run.collector_id),
     ),
   )
+  const freshnessItems =
+    collectorsQuery.data?.items.flatMap((summary) => summary.freshness) ?? []
 
   return (
     <AppLayout header={<PageHeader onRefresh={refresh} isRefreshing={isFetching} />}>
       {initialLoading ? (
         <MonitoringLoading />
-      ) : allFailed ? (
+      ) : allSourcesUnavailable ? (
         <MonitoringError onRetry={refresh} />
       ) : allEmpty ? (
         <MonitoringEmpty />
@@ -228,7 +307,7 @@ export function MonitoringPage() {
         <div className="space-y-6">
           <MonitoringPartialAlert errors={sourceErrors} failedAreas={failedAreas} />
 
-          <KpiCards runs={summaryQuery.data?.items ?? []} />
+          <KpiCards summary={summaryQuery.data} />
 
           <section aria-label="수집기 현황" className="space-y-3">
             <div>
@@ -238,22 +317,23 @@ export function MonitoringPage() {
               </p>
             </div>
             <div className="grid gap-4 lg:grid-cols-2">
-              {(collectorsQuery.data?.items ?? []).map((run) => (
+              {(collectorsQuery.data?.items ?? []).map((summary) => (
                 <CollectorCard
-                  key={`${run.collector_id}:${run.run_id}`}
-                  run={run}
+                  key={summary.collector_id}
+                  summary={summary}
                 />
               ))}
             </div>
           </section>
 
-          <FreshnessSummary items={freshnessQuery.data?.items ?? []} />
+          <FreshnessSummary items={freshnessItems} />
 
           <RunsTable
             runs={runsQuery.data?.items ?? []}
             total={runsQuery.data?.total ?? 0}
             collectors={collectorIds}
             filters={urlState.filters}
+            filterErrors={urlState.filterErrors}
             page={urlState.page}
             onFiltersChange={changeFilters}
             onPageChange={changePage}

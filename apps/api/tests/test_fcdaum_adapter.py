@@ -1,4 +1,5 @@
 from datetime import UTC, date, datetime
+from uuid import UUID
 
 import pytest
 
@@ -8,13 +9,19 @@ from monitoring_api.adapters.fcdaum import (
     FCDAUM_ATTEMPTS_FOR_RUNS_SQL,
     FCDAUM_COUNT_SQL,
     FCDAUM_FRESHNESS_SQL,
+    FCDAUM_LATEST_SUCCESS_SQL,
     FCDAUM_LATEST_SQL,
     FCDAUM_LIST_SQL,
     FCDAUM_RUN_SQL,
+    FCDAUM_STATUS_COUNTS_SQL,
     FcDaumAdapter,
 )
 from monitoring_api.db import ReadOnlyRepository, ensure_read_only_connection_string
 from monitoring_api.services.monitoring import MonitoringService
+
+
+RUN_ID_1 = "11111111-1111-4111-8111-111111111111"
+RUN_ID_2 = "22222222-2222-4222-8222-222222222222"
 
 
 class FixtureRepository:
@@ -34,7 +41,7 @@ class FixtureRepository:
 
 def _run_row() -> dict[str, object]:
     return {
-        "run_id": "run-1",
+        "run_id": RUN_ID_1,
         "scheduled_date": date(2026, 9, 8),
         "started_at": datetime(2026, 9, 8, 1),
         "completed_at": datetime(2026, 9, 8, 1, 5),
@@ -88,7 +95,39 @@ def test_fcdaum_retry_success_is_warning_and_all_attempts_are_preserved() -> Non
     assert run.inserted_count == 2
     assert (run.successful_units, run.failed_units) == (1, 0)
     assert [attempt.attempt_no for attempt in run.attempts] == [1, 2]
-    assert repository.calls[-1] == (FCDAUM_ATTEMPTS_SQL, ("run-1",))
+    assert repository.calls[-1] == (FCDAUM_ATTEMPTS_SQL, (RUN_ID_1,))
+
+
+def test_fcdaum_raw_aborted_wins_when_an_audit_attempt_is_missing() -> None:
+    repository = FixtureRepository(
+        {
+            FCDAUM_LATEST_SQL: [
+                {
+                    **_run_row(),
+                    "raw_status": "ABORTED",
+                    "successful_units": 1,
+                    "failed_units": 1,
+                }
+            ],
+            # 실패 attempt insert가 유실되고 성공 attempt만 남은 I5 경로다.
+            FCDAUM_ATTEMPTS_SQL: [
+                _attempt(
+                    1,
+                    "SUCCESS",
+                    source_count=3,
+                    inserted_count=1,
+                    committed=True,
+                )
+            ],
+        }
+    )
+
+    run = FcDaumAdapter(repository).latest()
+
+    assert run is not None
+    assert run.status is MonitoringStatus.ABORTED
+    assert (run.successful_units, run.failed_units) == (1, 1)
+    assert "IN ('RUNNING', 'ABORTED', 'NOT_RUN')" in FCDAUM_COUNT_SQL
 
 
 @pytest.mark.parametrize(
@@ -147,7 +186,7 @@ def test_fcdaum_freshness_uses_only_the_three_fixed_business_tables() -> None:
     result = FcDaumAdapter(repository).freshness()
 
     assert [item.dataset_id for item in result] == ["reports", "issues", "missions"]
-    assert result[0].latest_at == timestamp.replace(tzinfo=UTC)
+    assert result[0].latest_data_at == timestamp.replace(tzinfo=UTC)
     assert "dbo.fc_daum_qsc_report" in FCDAUM_FRESHNESS_SQL
     assert "dbo.fc_daum_qsc_report_issue" in FCDAUM_FRESHNESS_SQL
     assert "dbo.fc_daum_mission" in FCDAUM_FRESHNESS_SQL
@@ -184,6 +223,28 @@ def test_fcdaum_count_runs_uses_fixed_query_and_utc_parameters() -> None:
     assert "AttemptNo" in FCDAUM_COUNT_SQL
 
 
+def test_fcdaum_daily_status_counts_use_half_open_utc_range() -> None:
+    repository = FixtureRepository(
+        {
+            FCDAUM_STATUS_COUNTS_SQL: [
+                {"status": "SUCCESS_EMPTY", "total": 3},
+                {"status": "ABORTED", "total": 1},
+            ]
+        }
+    )
+
+    result = FcDaumAdapter(repository).count_runs_by_status(
+        started_from=datetime(2026, 9, 8, 15, tzinfo=UTC),
+        started_to=datetime(2026, 9, 9, 15, tzinfo=UTC),
+    )
+
+    assert result == {
+        MonitoringStatus.SUCCESS_EMPTY: 3,
+        MonitoringStatus.ABORTED: 1,
+    }
+    assert "runs.StartedAt >= ? AND runs.StartedAt < ?" in FCDAUM_STATUS_COUNTS_SQL
+
+
 def test_fcdaum_list_runs_filters_canonical_status_before_offset() -> None:
     repository = FixtureRepository({FCDAUM_LIST_SQL: []})
 
@@ -212,7 +273,7 @@ def test_read_only_connection_and_repository_reject_write_statements() -> None:
     assert "ApplicationIntent=ReadOnly" in connection_string
     assert connection_string.count("ApplicationIntent=") == 1
 
-    repository = ReadOnlyRepository(connection_string, connector=lambda _: None)
+    repository = ReadOnlyRepository(connection_string, connector=lambda _, **__: None)
     with pytest.raises(ValueError, match="SELECT"):
         repository.fetch_all("DELETE FROM dbo.FC_DAUM_COLLECTION_RUN")
     with pytest.raises(ValueError, match="SELECT"):
@@ -245,7 +306,7 @@ def test_read_only_repository_rejects_semicolonless_batches_and_admin_commands(
     connector_calls: list[str] = []
     repository = ReadOnlyRepository(
         "Driver={ODBC Driver 18 for SQL Server};Server=db",
-        connector=lambda connection_string: connector_calls.append(connection_string),
+        connector=lambda connection_string, **_: connector_calls.append(connection_string),
     )
 
     with pytest.raises(ValueError, match="SELECT"):
@@ -295,7 +356,7 @@ def test_connection_is_closed_when_cursor_creation_or_cursor_close_fails() -> No
         connection = Connection(cursor_fails=cursor_fails)
         repository = ReadOnlyRepository(
             "Driver={ODBC Driver 18 for SQL Server};Server=db",
-            connector=lambda _: connection,
+            connector=lambda _, **__: connection,
         )
 
         with pytest.raises(RuntimeError, match="cursor"):
@@ -313,7 +374,7 @@ def test_conflicting_application_intent_is_rejected() -> None:
 
 def test_fcdaum_list_runs_loads_all_attempts_in_one_bulk_query() -> None:
     first = _run_row()
-    second = {**_run_row(), "run_id": "run-2"}
+    second = {**_run_row(), "run_id": RUN_ID_2}
     repository = FixtureRepository(
         {
             FCDAUM_LIST_SQL: [first, second],
@@ -326,7 +387,7 @@ def test_fcdaum_list_runs_loads_all_attempts_in_one_bulk_query() -> None:
                         inserted_count=1,
                         committed=True,
                     ),
-                    "run_id": "run-1",
+                    "run_id": RUN_ID_1,
                 },
                 {
                     **_attempt(
@@ -336,7 +397,7 @@ def test_fcdaum_list_runs_loads_all_attempts_in_one_bulk_query() -> None:
                         inserted_count=0,
                         committed=True,
                     ),
-                    "run_id": "run-2",
+                    "run_id": RUN_ID_2,
                 },
             ],
         }
@@ -344,13 +405,13 @@ def test_fcdaum_list_runs_loads_all_attempts_in_one_bulk_query() -> None:
 
     runs = FcDaumAdapter(repository).list_runs(limit=2)
 
-    assert [run.run_id for run in runs] == ["run-1", "run-2"]
+    assert [run.run_id for run in runs] == [UUID(RUN_ID_1), UUID(RUN_ID_2)]
     assert [len(run.attempts) for run in runs] == [1, 1]
     assert [call[0] for call in repository.calls] == [
         FCDAUM_LIST_SQL,
         FCDAUM_ATTEMPTS_FOR_RUNS_SQL,
     ]
-    assert repository.calls[1][1] == ('["run-1", "run-2"]',)
+    assert repository.calls[1][1] == (f'["{RUN_ID_1}", "{RUN_ID_2}"]',)
 
 
 def test_all_fcdaum_fixed_queries_pass_the_read_only_validator() -> None:
@@ -358,6 +419,8 @@ def test_all_fcdaum_fixed_queries_pass_the_read_only_validator() -> None:
         FCDAUM_LATEST_SQL,
         FCDAUM_LIST_SQL,
         FCDAUM_COUNT_SQL,
+        FCDAUM_STATUS_COUNTS_SQL,
+        FCDAUM_LATEST_SUCCESS_SQL,
         FCDAUM_RUN_SQL,
         FCDAUM_ATTEMPTS_SQL,
         FCDAUM_ATTEMPTS_FOR_RUNS_SQL,
@@ -432,7 +495,7 @@ def test_fcdaum_uuid_candidate_boundary_uses_service_string_order() -> None:
 
     assert native_order != string_order
     assert result.total == 4
-    assert [run.run_id for run in result.items] == string_order[1:3]
+    assert [str(run.run_id) for run in result.items] == string_order[1:3]
 
 
 def test_read_only_validator_allows_a_single_tsql_cte_query() -> None:

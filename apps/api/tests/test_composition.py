@@ -27,9 +27,19 @@ class ReadyRepository:
     """외부 DB 없이 실제 어댑터의 readiness 계약을 실행하는 저장소다."""
 
     created_with: list[str] = []
+    created_timeouts: list[tuple[int, int]] = []
 
-    def __init__(self, connection_string: str) -> None:
+    def __init__(
+        self,
+        connection_string: str,
+        *,
+        connect_timeout_seconds: int,
+        query_timeout_seconds: int,
+    ) -> None:
         self.created_with.append(connection_string)
+        self.created_timeouts.append(
+            (connect_timeout_seconds, query_timeout_seconds)
+        )
 
     def fetch_all(
         self, sql: str, parameters: tuple[object, ...] = ()
@@ -44,6 +54,7 @@ class ReadyRepository:
 @pytest.fixture(autouse=True)
 def clear_repository_calls() -> None:
     ReadyRepository.created_with.clear()
+    ReadyRepository.created_timeouts.clear()
 
 
 def test_settings_loads_optional_connection_strings_as_masked_secrets(
@@ -87,6 +98,36 @@ def test_composition_registers_both_configured_sources(
         FCDAUM_CONNECTION_STRING,
         HMR_CONNECTION_STRING,
     ]
+    assert ReadyRepository.created_timeouts == [(5, 30), (5, 30)]
+
+
+def test_composition_applies_explicit_collector_policy_and_deadlines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(composition, "ReadOnlyRepository", ReadyRepository)
+    settings = Settings(
+        fcdaum_connection_string=FCDAUM_CONNECTION_STRING,
+        db_connect_timeout_seconds=7,
+        db_query_timeout_seconds=11,
+        source_timeout_seconds=13,
+        fcdaum_schedule_timezone="Asia/Seoul",
+        fcdaum_daily_scheduled_time="06:30",
+        fcdaum_max_duration_minutes=120,
+        fcdaum_freshness_sla_minutes="reports=180,issues=240,missions=300",
+        _env_file=None,
+    )
+
+    result = build_monitoring_service(settings).collectors()
+
+    assert ReadyRepository.created_timeouts == [(7, 11)]
+    assert result.items[0].schedule_timezone == "Asia/Seoul"
+    assert result.items[0].daily_scheduled_time.isoformat() == "06:30:00"
+    assert result.items[0].max_duration_minutes == 120
+    assert settings.fcdaum_freshness_sla_minutes == {
+        "reports": 180,
+        "issues": 240,
+        "missions": 300,
+    }
 
 
 @pytest.mark.parametrize(

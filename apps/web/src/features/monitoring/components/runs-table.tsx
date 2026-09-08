@@ -28,11 +28,17 @@ export interface RunFilters {
   status: MonitoringStatus | ''
 }
 
+export interface RunFilterErrors {
+  from?: string
+  to?: string
+}
+
 interface RunsTableProps {
   runs: CollectorRun[]
   total: number
   collectors: string[]
   filters: RunFilters
+  filterErrors: RunFilterErrors
   page: number
   onFiltersChange: (filters: RunFilters) => void
   onPageChange: (page: number) => void
@@ -52,6 +58,7 @@ export function RunsTable({
   total,
   collectors,
   filters,
+  filterErrors,
   page,
   onFiltersChange,
   onPageChange,
@@ -81,19 +88,35 @@ export function RunsTable({
               조회 시작일
               <input
                 type="date"
+                aria-label="조회 시작일"
                 className={fieldClassName}
                 value={filters.from}
+                aria-invalid={filterErrors.from !== undefined}
+                aria-describedby={filterErrors.from ? 'runs-from-error' : undefined}
                 onChange={(event) => updateFilter('from', event.target.value)}
               />
+              {filterErrors.from ? (
+                <span id="runs-from-error" role="alert" className="text-destructive">
+                  {filterErrors.from}
+                </span>
+              ) : null}
             </label>
             <label className="grid gap-1 text-xs font-medium text-muted-foreground">
               조회 종료일
               <input
                 type="date"
+                aria-label="조회 종료일"
                 className={fieldClassName}
                 value={filters.to}
+                aria-invalid={filterErrors.to !== undefined}
+                aria-describedby={filterErrors.to ? 'runs-to-error' : undefined}
                 onChange={(event) => updateFilter('to', event.target.value)}
               />
+              {filterErrors.to ? (
+                <span id="runs-to-error" role="alert" className="text-destructive">
+                  {filterErrors.to}
+                </span>
+              ) : null}
             </label>
             <label className="grid gap-1 text-xs font-medium text-muted-foreground">
               수집기 필터

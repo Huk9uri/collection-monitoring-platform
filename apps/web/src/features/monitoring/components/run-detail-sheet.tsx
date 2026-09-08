@@ -26,18 +26,12 @@ interface RunDetailSheetProps {
 }
 
 function attemptOutcome(attempt: CollectorAttempt) {
-  const status = attempt.raw_status.trim().toUpperCase()
+  const status = attempt.outcome
 
-  if (
-    (status === 'SUCCESS' || status === 'SUCCESS_EMPTY') &&
-    attempt.committed !== false
-  ) {
+  if (status === 'SUCCESS' || status === 'SUCCESS_EMPTY') {
     return { label: '성공', variant: 'healthy' as const }
   }
-  if (
-    attempt.committed === false ||
-    /FAILED|FAILURE|ERROR|ABORTED/.test(status)
-  ) {
+  if (status === 'PARTIAL_FAILED' || status === 'FAILED' || status === 'ABORTED') {
     return { label: '실패', variant: 'incident' as const }
   }
   if (status === 'RUNNING') {
