@@ -1,6 +1,6 @@
 # Collection Monitoring Platform
 
-FC다움, HMR 및 향후 추가될 데이터 수집기의 실행·적재·신선도를 한곳에서
+FC다움, HMR, SmartPlace 및 향후 추가될 데이터 수집기의 실행·적재·신선도를 한곳에서
 확인하기 위한 사내 운영 모니터링 플랫폼입니다.
 
 웹과 API는 하나의 모노레포에서 계약과 변경 이력을 공유하지만, 각각 독립된
@@ -68,16 +68,24 @@ API와 웹의 실제 로컬 실행, 환경변수 위치, 읽기 전용 DB 계정
 reverse proxy, 여덟 상태별 조치와 장애 대응은
 [`docs/운영/배포-및-장애대응.md`](docs/운영/배포-및-장애대응.md)에 있습니다.
 
-두 DB 연결 환경변수 중 설정된 소스만 API에 등록됩니다. 둘 다 없으면
+세 DB 연결 환경변수 중 설정된 소스만 API에 등록됩니다. 모두 없으면
 `/health/live`는 프로세스 생존을 나타내므로 200이지만 `/health/ready`는
 명확히 503을 반환합니다. 연결 문자열은 데이터 소스별 SELECT 전용 계정과
 `ApplicationIntent=ReadOnly`를 사용해야 하며, 앱 시작 시 DB 연결이나 수집
 작업을 실행하지 않습니다.
 
+SmartPlace는 naverDB의 `SMARTPLACE_COLLECTION_RUN`과
+`SMARTPLACE_COLLECTION_ATTEMPT`를 SELECT 전용 계정으로 조회합니다. 한촌설렁탕과
+육수당은 실행 이력의 별도 브랜드 행으로 표시되고 상세에서 `login`, `normal`,
+`pos_linked` 시도를 확인할 수 있습니다. DBA 적용, 크롤러 계측 배포, 첫 예약 회차
+대조와 롤백은
+[`docs/운영/smartplace-사후-모니터링.md`](docs/운영/smartplace-사후-모니터링.md)를
+따릅니다.
+
 ## MVP 원칙
 
 - 읽기 전용 모니터링
-- FC다움 및 HMR 우선 지원
+- FC다움, HMR 및 SmartPlace 지원
 - 수집기 어댑터 기반 확장
 - 로그인 구현은 유보하되 인증·권한 경계는 포함
 - `PARTIAL_FAILED`는 화면에서 `부분 실패`로 표시하는 장애 상태
