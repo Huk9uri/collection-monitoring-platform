@@ -125,6 +125,64 @@ def test_list_runs_returns_one_row_per_brand_with_attempts_in_one_bulk_query() -
     ]
 
 
+def test_account_outcomes_do_not_reduce_raw_partial_failure_to_warning() -> None:
+    run_row = {
+        **_run_row(RUN_ID_HANCHON, "hanchon", "한촌설렁탕"),
+        "raw_status": "PARTIAL_FAILED",
+        "successful_units": 1,
+        "failed_units": 1,
+    }
+    repository = FixtureRepository(
+        {
+            SMARTPLACE_LIST_SQL: [run_row],
+            SMARTPLACE_ATTEMPTS_FOR_RUNS_SQL: [
+                _attempt_row(
+                    RUN_ID_HANCHON,
+                    "normal",
+                    attempt_no=1,
+                    raw_status="FAILED",
+                ),
+                _attempt_row(
+                    RUN_ID_HANCHON,
+                    "normal",
+                    attempt_no=2,
+                    raw_status="SUCCESS",
+                ),
+            ],
+        }
+    )
+
+    run = SmartPlaceAdapter(repository).list_runs(limit=1)[0]
+
+    assert run.status is MonitoringStatus.PARTIAL_FAILED
+    assert (run.successful_units, run.failed_units) == (1, 1)
+    assert [attempt.attempt_no for attempt in run.attempts] == [1, 2]
+
+
+def test_login_success_does_not_reduce_raw_collection_failure() -> None:
+    run_row = {
+        **_run_row(RUN_ID_HANCHON, "hanchon", "한촌설렁탕"),
+        "raw_status": "FAILED",
+        "successful_units": 0,
+        "failed_units": 1,
+    }
+    repository = FixtureRepository(
+        {
+            SMARTPLACE_LIST_SQL: [run_row],
+            SMARTPLACE_ATTEMPTS_FOR_RUNS_SQL: [
+                _attempt_row(RUN_ID_HANCHON, "login", raw_status="SUCCESS"),
+                _attempt_row(RUN_ID_HANCHON, "normal", raw_status="FAILED"),
+            ],
+        }
+    )
+
+    run = SmartPlaceAdapter(repository).list_runs(limit=1)[0]
+
+    assert run.status is MonitoringStatus.FAILED
+    assert (run.successful_units, run.failed_units) == (0, 1)
+    assert [attempt.unit_id for attempt in run.attempts] == ["login", "normal"]
+
+
 def test_delayed_start_in_same_kst_schedule_date_is_not_marked_not_run() -> None:
     hanchon = _run_row(
         RUN_ID_HANCHON,

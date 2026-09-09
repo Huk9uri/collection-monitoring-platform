@@ -17,6 +17,7 @@ from monitoring_api.adapters.base import (
     FreshnessRecord,
     as_utc,
     attempt_from_row,
+    map_raw_status,
     run_from_row,
     to_sql_datetime,
 )
@@ -91,60 +92,7 @@ _SMARTPLACE_RAW_STATUS_SQL = """CASE UPPER(LTRIM(RTRIM(runs.RunStatus)))
     WHEN 'ABORTED' THEN 'ABORTED'
     ELSE 'FAILED' END"""
 
-_ATTEMPT_STATUS_SQL = "COALESCE(UPPER(LTRIM(RTRIM(attempt.AttemptStatus))), '')"
-_FINAL_ATTEMPT_SUCCESS_SQL = f"""{_ATTEMPT_STATUS_SQL}
-    IN ('SUCCESS', 'SUCCESS_EMPTY', 'SUCCESS_WITH_DATA')
-    AND ISNULL(attempt.DbCommitted, CAST(1 AS bit)) = CAST(1 AS bit)"""
-
-_SMARTPLACE_CANONICAL_STATUS_SQL = f"""CASE
-    WHEN {_SMARTPLACE_RAW_STATUS_SQL} IN ('RUNNING', 'ABORTED')
-        THEN {_SMARTPLACE_RAW_STATUS_SQL}
-    WHEN NOT EXISTS (
-        SELECT 1 FROM dbo.SMARTPLACE_COLLECTION_ATTEMPT AS attempt
-        WHERE attempt.RunId = runs.RunId
-    ) THEN {_SMARTPLACE_RAW_STATUS_SQL}
-    WHEN NOT EXISTS (
-        SELECT 1 FROM dbo.SMARTPLACE_COLLECTION_ATTEMPT AS attempt
-        WHERE attempt.RunId = runs.RunId
-          AND attempt.AttemptNo = (
-              SELECT MAX(latest.AttemptNo)
-              FROM dbo.SMARTPLACE_COLLECTION_ATTEMPT AS latest
-              WHERE latest.RunId = attempt.RunId
-                AND latest.UnitCode = attempt.UnitCode
-          )
-          AND {_FINAL_ATTEMPT_SUCCESS_SQL}
-    ) THEN 'FAILED'
-    WHEN EXISTS (
-        SELECT 1 FROM dbo.SMARTPLACE_COLLECTION_ATTEMPT AS attempt
-        WHERE attempt.RunId = runs.RunId
-          AND attempt.AttemptNo = (
-              SELECT MAX(latest.AttemptNo)
-              FROM dbo.SMARTPLACE_COLLECTION_ATTEMPT AS latest
-              WHERE latest.RunId = attempt.RunId
-                AND latest.UnitCode = attempt.UnitCode
-          )
-          AND NOT ({_FINAL_ATTEMPT_SUCCESS_SQL})
-    ) THEN 'PARTIAL_FAILED'
-    WHEN EXISTS (
-        SELECT 1 FROM dbo.SMARTPLACE_COLLECTION_ATTEMPT AS attempt
-        WHERE attempt.RunId = runs.RunId
-          AND (
-              attempt.AttemptNo > 1
-              OR NOT ({_FINAL_ATTEMPT_SUCCESS_SQL})
-          )
-    ) THEN 'WARNING'
-    WHEN NOT EXISTS (
-        SELECT 1 FROM dbo.SMARTPLACE_COLLECTION_ATTEMPT AS attempt
-        WHERE attempt.RunId = runs.RunId
-          AND attempt.AttemptNo = (
-              SELECT MAX(latest.AttemptNo)
-              FROM dbo.SMARTPLACE_COLLECTION_ATTEMPT AS latest
-              WHERE latest.RunId = attempt.RunId
-                AND latest.UnitCode = attempt.UnitCode
-          )
-          AND (attempt.SourceCount IS NULL OR attempt.SourceCount <> 0)
-    ) THEN 'SUCCESS_EMPTY'
-    ELSE 'SUCCESS' END"""
+_SMARTPLACE_CANONICAL_STATUS_SQL = _SMARTPLACE_RAW_STATUS_SQL
 
 _DYNAMIC_STATUS_SQL = f"""CASE
     WHEN {_SMARTPLACE_RAW_STATUS_SQL} = 'RUNNING'
@@ -357,6 +305,19 @@ class SmartPlaceAdapter:
         canonical = row.get("canonical_status")
         if canonical is not None:
             run = run.model_copy(update={"status": MonitoringStatus(str(canonical))})
+        raw_status = map_raw_status(str(row["raw_status"]))
+        effective_status = max(
+            (run.status, raw_status),
+            key=lambda status: _STATUS_SEVERITY[status],
+        )
+        run = run.model_copy(
+            update={
+                "status": effective_status,
+                # 생산자가 account_key별 결과에서 login을 제외해 확정한 집계다.
+                "successful_units": int(row.get("successful_units") or 0),
+                "failed_units": int(row.get("failed_units") or 0),
+            }
+        )
         if (
             self._policy is not None
             and run.status is MonitoringStatus.RUNNING
