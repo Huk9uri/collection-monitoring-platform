@@ -24,3 +24,6 @@ coverage/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# 로컬 업무 보고 산출물
+*_업무_보고.md
