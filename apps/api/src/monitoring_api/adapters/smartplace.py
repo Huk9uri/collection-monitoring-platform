@@ -64,6 +64,14 @@ class SmartPlacePolicy:
             raise ValueError("SmartPlace 예상 scope ID는 중복될 수 없습니다.")
 
 
+@dataclass(frozen=True)
+class _ScheduledOccurrence:
+    scheduled_at: datetime
+    local_scheduled_at: datetime
+    range_start: datetime
+    range_end: datetime
+
+
 _SMARTPLACE_RAW_STATUS_SQL = """CASE UPPER(LTRIM(RTRIM(runs.RunStatus)))
     WHEN 'SUCCESS' THEN 'SUCCESS'
     WHEN 'SUCCESS_WITH_DATA' THEN 'SUCCESS'
@@ -165,6 +173,19 @@ WHERE (? IS NULL OR started_at >= ?)
 ORDER BY started_at DESC, CONVERT(char(36), run_id) DESC
 OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"""
 
+SMARTPLACE_OCCURRENCE_RUNS_SQL = f"""WITH normalized_runs AS (
+    SELECT
+{_RUN_COLUMNS},
+        {_DYNAMIC_STATUS_SQL} AS canonical_status
+    FROM dbo.SMARTPLACE_COLLECTION_RUN AS runs
+)
+SELECT
+    run_id, scheduled_at, started_at, completed_at, raw_status,
+    successful_units, failed_units, scope_id, scope_name, canonical_status
+FROM normalized_runs
+WHERE scheduled_at >= ? AND scheduled_at < ?
+ORDER BY scheduled_at DESC, started_at DESC, CONVERT(char(36), run_id) DESC"""
+
 SMARTPLACE_COUNT_SQL = f"""WITH normalized_runs AS (
     SELECT runs.StartedAt AS started_at,
            {_DYNAMIC_STATUS_SQL} AS canonical_status
@@ -245,7 +266,7 @@ ORDER BY RunId,
 
 SMARTPLACE_PRESENT_SCOPES_SQL = """SELECT BrandCode AS scope_id
 FROM dbo.SMARTPLACE_COLLECTION_RUN
-WHERE ScheduledAt = ?"""
+WHERE ScheduledAt >= ? AND ScheduledAt < ?"""
 
 
 _SYNTHETIC_NAMESPACE = UUID("5d2b2540-bcf7-47be-8e58-5d739f8c8bc3")
@@ -294,6 +315,25 @@ class SmartPlaceAdapter:
             )
         ]
 
+    def _runs_from_rows(
+        self, rows: list[dict[str, object]]
+    ) -> list[CollectorRun]:
+        attempts_by_run: dict[str, list[CollectorAttempt]] = defaultdict(list)
+        if rows:
+            run_ids = [str(row["run_id"]) for row in rows]
+            attempt_rows = self._repository.fetch_all(
+                SMARTPLACE_ATTEMPTS_FOR_RUNS_SQL,
+                (json.dumps(run_ids),),
+            )
+            for attempt_row in attempt_rows:
+                attempts_by_run[str(attempt_row["run_id"])].append(
+                    attempt_from_row(attempt_row)
+                )
+        return [
+            self._run(row, attempts_by_run.get(str(row["run_id"]), []))
+            for row in rows
+        ]
+
     def _run(
         self, row: dict[str, object], attempts: list[CollectorAttempt]
     ) -> CollectorRun:
@@ -318,50 +358,53 @@ class SmartPlaceAdapter:
             return run.model_copy(update={"status": MonitoringStatus.ABORTED})
         return run
 
-    def _scheduled_occurrence(self) -> tuple[datetime, datetime] | None:
+    def _scheduled_occurrence(self) -> _ScheduledOccurrence | None:
         if self._policy is None:
             return None
         now = self._now()
         timezone = ZoneInfo(self._policy.schedule_timezone)
         local_now = now.astimezone(timezone)
-        local_scheduled_at = datetime.combine(
+        today_scheduled_at = datetime.combine(
             local_now.date(), self._policy.daily_scheduled_time, tzinfo=timezone
         )
-        scheduled_at = local_scheduled_at.astimezone(UTC)
-        if now < scheduled_at + self._policy.start_grace:
-            return None
-        return scheduled_at, local_scheduled_at
-
-    def _missing_runs(
-        self,
-        *,
-        started_from: datetime | None = None,
-        started_to: datetime | None = None,
-        status: MonitoringStatus | None = None,
-    ) -> list[CollectorRun]:
-        occurrence = self._scheduled_occurrence()
-        if occurrence is None or self._policy is None:
-            return []
-        scheduled_at, local_scheduled_at = occurrence
-        if started_from is not None and scheduled_at < started_from:
-            return []
-        if started_to is not None and scheduled_at > started_to:
-            return []
-        if status not in (None, MonitoringStatus.NOT_RUN):
-            return []
-        rows = self._repository.fetch_all(
-            SMARTPLACE_PRESENT_SCOPES_SQL, (to_sql_datetime(scheduled_at),)
+        occurrence_date = local_now.date()
+        if now < today_scheduled_at.astimezone(UTC) + self._policy.start_grace:
+            occurrence_date -= timedelta(days=1)
+        local_scheduled_at = datetime.combine(
+            occurrence_date,
+            self._policy.daily_scheduled_time,
+            tzinfo=timezone,
         )
-        present = {str(row["scope_id"]) for row in rows}
+        scheduled_at = local_scheduled_at.astimezone(UTC)
+        local_range_start = datetime.combine(
+            occurrence_date, time.min, tzinfo=timezone
+        )
+        local_range_end = datetime.combine(
+            occurrence_date + timedelta(days=1), time.min, tzinfo=timezone
+        )
+        return _ScheduledOccurrence(
+            scheduled_at=scheduled_at,
+            local_scheduled_at=local_scheduled_at,
+            range_start=local_range_start.astimezone(UTC),
+            range_end=local_range_end.astimezone(UTC),
+        )
+
+    def _synthetic_missing_runs(
+        self,
+        occurrence: _ScheduledOccurrence,
+        *,
+        present: set[str],
+    ) -> list[CollectorRun]:
+        assert self._policy is not None
         return [
             CollectorRun(
                 collector_id=self.collector_id,
                 run_id=uuid5(
                     _SYNTHETIC_NAMESPACE,
-                    f"{scheduled_at.isoformat()}:{scope.scope_id}",
+                    f"{occurrence.scheduled_at.isoformat()}:{scope.scope_id}",
                 ),
-                scheduled_date=local_scheduled_at.date(),
-                started_at=scheduled_at,
+                scheduled_date=occurrence.local_scheduled_at.date(),
+                started_at=occurrence.scheduled_at,
                 completed_at=None,
                 status=MonitoringStatus.NOT_RUN,
                 successful_units=0,
@@ -377,15 +420,64 @@ class SmartPlaceAdapter:
             if scope.scope_id not in present
         ]
 
+    def _missing_runs(
+        self,
+        *,
+        started_from: datetime | None = None,
+        started_to: datetime | None = None,
+        status: MonitoringStatus | None = None,
+    ) -> list[CollectorRun]:
+        occurrence = self._scheduled_occurrence()
+        if occurrence is None or self._policy is None:
+            return []
+        if started_from is not None and occurrence.scheduled_at < started_from:
+            return []
+        if started_to is not None and occurrence.scheduled_at > started_to:
+            return []
+        if status not in (None, MonitoringStatus.NOT_RUN):
+            return []
+        rows = self._repository.fetch_all(
+            SMARTPLACE_PRESENT_SCOPES_SQL,
+            (
+                to_sql_datetime(occurrence.range_start),
+                to_sql_datetime(occurrence.range_end),
+            ),
+        )
+        present = {str(row["scope_id"]) for row in rows}
+        return self._synthetic_missing_runs(occurrence, present=present)
+
     def latest(self) -> CollectorRun | None:
-        limit = 1 if self._policy is None else len(self._policy.expected_scopes) + 1
-        runs = self.list_runs(limit=limit)
+        occurrence = self._scheduled_occurrence()
+        if occurrence is None or self._policy is None:
+            runs = self.list_runs(limit=1)
+            return runs[0] if runs else None
+        rows = self._repository.fetch_all(
+            SMARTPLACE_OCCURRENCE_RUNS_SQL,
+            (
+                to_sql_datetime(self._stale_cutoff()),
+                to_sql_datetime(occurrence.range_start),
+                to_sql_datetime(occurrence.range_end),
+            ),
+        )
+        expected_ids = {
+            scope.scope_id for scope in self._policy.expected_scopes
+        }
+        latest_by_scope: dict[str, CollectorRun] = {}
+        for run in self._runs_from_rows(rows):
+            if run.scope_id in expected_ids and run.scope_id not in latest_by_scope:
+                assert run.scope_id is not None
+                latest_by_scope[run.scope_id] = run
+        runs = list(latest_by_scope.values())
+        runs.extend(
+            self._synthetic_missing_runs(
+                occurrence,
+                present=set(latest_by_scope),
+            )
+        )
         if not runs:
             return None
-        latest_date = max(run.scheduled_date for run in runs)
-        cohort = [run for run in runs if run.scheduled_date == latest_date]
         return max(
-            cohort,
+            runs,
             key=lambda run: (
                 _STATUS_SEVERITY[run.status],
                 run.started_at,
@@ -419,21 +511,7 @@ class SmartPlaceAdapter:
                 offset + limit + synthetic_capacity,
             ),
         )
-        attempts_by_run: dict[str, list[CollectorAttempt]] = defaultdict(list)
-        if rows:
-            run_ids = [str(row["run_id"]) for row in rows]
-            attempt_rows = self._repository.fetch_all(
-                SMARTPLACE_ATTEMPTS_FOR_RUNS_SQL,
-                (json.dumps(run_ids),),
-            )
-            for attempt_row in attempt_rows:
-                attempts_by_run[str(attempt_row["run_id"])].append(
-                    attempt_from_row(attempt_row)
-                )
-        runs = [
-            self._run(row, attempts_by_run.get(str(row["run_id"]), []))
-            for row in rows
-        ]
+        runs = self._runs_from_rows(rows)
         if status is not None:
             runs = [run for run in runs if run.status is status]
         runs.extend(

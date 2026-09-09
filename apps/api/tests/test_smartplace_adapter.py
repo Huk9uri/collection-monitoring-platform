@@ -8,6 +8,7 @@ from monitoring_api.adapters.smartplace import (
     SMARTPLACE_ATTEMPTS_SQL,
     SMARTPLACE_LATEST_SUCCESS_SQL,
     SMARTPLACE_LIST_SQL,
+    SMARTPLACE_OCCURRENCE_RUNS_SQL,
     SMARTPLACE_PRESENT_SCOPES_SQL,
     SMARTPLACE_RUN_SQL,
     ExpectedScope,
@@ -53,13 +54,14 @@ def _run_row(
     brand_code: str,
     brand_name: str,
     *,
+    scheduled_at: datetime = datetime(2026, 9, 10, 19),
     started_at: datetime = datetime(2026, 9, 10, 19),
     completed_at: datetime | None = datetime(2026, 9, 10, 19, 5),
     raw_status: str = "SUCCESS",
 ) -> dict[str, object]:
     return {
         "run_id": run_id,
-        "scheduled_at": datetime(2026, 9, 10, 19),
+        "scheduled_at": scheduled_at,
         "started_at": started_at,
         "completed_at": completed_at,
         "raw_status": raw_status,
@@ -123,12 +125,13 @@ def test_list_runs_returns_one_row_per_brand_with_attempts_in_one_bulk_query() -
     ]
 
 
-def test_missing_expected_brand_is_not_run_only_after_start_grace() -> None:
+def test_delayed_start_in_same_kst_schedule_date_is_not_marked_not_run() -> None:
     hanchon = _run_row(
         RUN_ID_HANCHON,
         "hanchon",
         "한촌설렁탕",
-        started_at=datetime(2026, 9, 10, 18, 59),
+        scheduled_at=datetime(2026, 9, 10, 19, 1),
+        started_at=datetime(2026, 9, 10, 19, 1),
     )
     repository = FixtureRepository(
         {
@@ -142,18 +145,79 @@ def test_missing_expected_brand_is_not_run_only_after_start_grace() -> None:
         limit=20
     )
 
-    assert runs[0].scope_id == "yuksoodang"
-    assert runs[0].scope_name == "육수당"
-    assert runs[0].status is MonitoringStatus.NOT_RUN
-    assert runs[0].started_at == datetime(2026, 9, 10, 19, tzinfo=UTC)
-    assert runs[0].source_count is None
+    runs_by_scope = {run.scope_id: run for run in runs}
+    assert runs_by_scope["yuksoodang"].scope_name == "육수당"
+    assert runs_by_scope["yuksoodang"].status is MonitoringStatus.NOT_RUN
+    assert runs_by_scope["yuksoodang"].started_at == datetime(
+        2026, 9, 10, 19, tzinfo=UTC
+    )
+    assert runs_by_scope["yuksoodang"].source_count is None
+    assert [run.scope_id for run in runs].count("hanchon") == 1
+    assert repository.calls[-1] == (
+        SMARTPLACE_PRESENT_SCOPES_SQL,
+        (datetime(2026, 9, 10, 15), datetime(2026, 9, 11, 15)),
+    )
 
-    before_grace = SmartPlaceAdapter(
-        FixtureRepository({SMARTPLACE_LIST_SQL: []}),
-        policy=POLICY,
-        clock=lambda: datetime(2026, 9, 10, 19, 14, tzinfo=UTC),
-    ).list_runs(limit=20)
-    assert before_grace == []
+
+def test_before_today_grace_keeps_previous_missing_occurrence_visible() -> None:
+    repository = FixtureRepository(
+        {
+            SMARTPLACE_LIST_SQL: [],
+            SMARTPLACE_PRESENT_SCOPES_SQL: [],
+        }
+    )
+    # 2026-09-11 03:00 KST: 오늘 04:00 + 유예 전이므로 9월 10일 회차다.
+    clock = lambda: datetime(2026, 9, 10, 18, tzinfo=UTC)
+
+    runs = SmartPlaceAdapter(repository, policy=POLICY, clock=clock).list_runs()
+
+    assert [(run.scheduled_date, run.scope_id, run.status) for run in runs] == [
+        (date(2026, 9, 10), "hanchon", MonitoringStatus.NOT_RUN),
+        (date(2026, 9, 10), "yuksoodang", MonitoringStatus.NOT_RUN),
+    ]
+
+
+def test_latest_selects_current_occurrence_before_started_at_pagination() -> None:
+    current_hanchon = _run_row(
+        RUN_ID_HANCHON,
+        "hanchon",
+        "한촌설렁탕",
+        scheduled_at=datetime(2026, 9, 10, 19, 1),
+        started_at=datetime(2026, 9, 10, 19, 1),
+    )
+    repository = FixtureRepository(
+        {
+            # 전 회차 늦은 재실행은 일반 목록 상단 후보가 될 수 있다.
+            SMARTPLACE_LIST_SQL: [
+                _run_row(
+                    "33333333-3333-4333-8333-333333333333",
+                    "hanchon",
+                    "한촌설렁탕",
+                    scheduled_at=datetime(2026, 9, 9, 19),
+                    started_at=datetime(2026, 9, 10, 19, 10),
+                ),
+                _run_row(
+                    "44444444-4444-4444-8444-444444444444",
+                    "yuksoodang",
+                    "육수당",
+                    scheduled_at=datetime(2026, 9, 9, 19),
+                    started_at=datetime(2026, 9, 10, 19, 9),
+                ),
+            ],
+            SMARTPLACE_OCCURRENCE_RUNS_SQL: [current_hanchon],
+            SMARTPLACE_ATTEMPTS_FOR_RUNS_SQL: [],
+            SMARTPLACE_PRESENT_SCOPES_SQL: [{"scope_id": "hanchon"}],
+        }
+    )
+
+    latest = SmartPlaceAdapter(
+        repository, policy=POLICY, clock=lambda: NOW
+    ).latest()
+
+    assert latest is not None
+    assert latest.scope_id == "yuksoodang"
+    assert latest.status is MonitoringStatus.NOT_RUN
+    assert SMARTPLACE_LIST_SQL not in [call[0] for call in repository.calls]
 
 
 def test_stale_running_is_aborted_without_updating_the_database() -> None:
