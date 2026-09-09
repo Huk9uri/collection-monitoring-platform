@@ -15,6 +15,8 @@ const partialFailedRun: CollectorRun = {
   status: 'PARTIAL_FAILED',
   successful_units: 1,
   failed_units: 1,
+  scope_id: null,
+  scope_name: null,
   source_count: 10,
   inserted_count: 4,
   changed_count: 2,
@@ -98,6 +100,49 @@ const partialFailedRun: CollectorRun = {
   ],
 }
 
+const smartPlaceRun: CollectorRun = {
+  ...partialFailedRun,
+  collector_id: 'smartplace',
+  scope_id: 'hanchon',
+  scope_name: '한촌설렁탕',
+  source_count: null,
+  inserted_count: null,
+  changed_count: null,
+  unchanged_count: null,
+  attempts: [
+    {
+      unit_id: 'login',
+      unit_name: 'login',
+      attempt_no: 1,
+      started_at: '2026-09-08T01:00:00Z',
+      completed_at: '2026-09-08T01:00:03Z',
+      outcome: 'SUCCESS',
+      raw_status: 'SUCCESS',
+      source_count: null,
+      inserted_count: null,
+      changed_count: null,
+      unchanged_count: null,
+      committed: null,
+      error_category: null,
+    },
+    {
+      unit_id: 'pos_linked',
+      unit_name: 'pos_linked',
+      attempt_no: 1,
+      started_at: '2026-09-08T01:00:03Z',
+      completed_at: '2026-09-08T01:01:00Z',
+      outcome: 'SUCCESS',
+      raw_status: 'SUCCESS',
+      source_count: null,
+      inserted_count: null,
+      changed_count: null,
+      unchanged_count: null,
+      committed: true,
+      error_category: null,
+    },
+  ],
+}
+
 describe('RunDetailSheet', () => {
   it('부분 실패를 장애로 표시하고 성공·실패 하위 작업을 구분한다', () => {
     render(
@@ -154,5 +199,21 @@ describe('RunDetailSheet', () => {
     for (const row of [runningRow, notRunRow, warningRow]) {
       expect(row?.textContent).not.toContain('성공')
     }
+  })
+
+  it('SmartPlace 브랜드의 login과 pos_linked 하위 작업 및 미확인 집계를 표시한다', () => {
+    render(
+      <RunDetailSheet
+        open
+        onOpenChange={vi.fn()}
+        run={smartPlaceRun}
+        isLoading={false}
+      />,
+    )
+
+    expect(screen.getByText('한촌설렁탕')).toBeTruthy()
+    expect(screen.getByRole('cell', { name: 'login' })).toBeTruthy()
+    expect(screen.getByRole('cell', { name: 'pos_linked' })).toBeTruthy()
+    expect(screen.getAllByText('-').length).toBeGreaterThan(0)
   })
 })

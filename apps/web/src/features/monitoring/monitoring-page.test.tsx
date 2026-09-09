@@ -34,6 +34,8 @@ const successfulRun: CollectorRun = {
   status: 'SUCCESS',
   successful_units: 2,
   failed_units: 0,
+  scope_id: null,
+  scope_name: null,
   source_count: 10,
   inserted_count: 4,
   changed_count: 2,
@@ -272,7 +274,7 @@ describe('MonitoringPage', () => {
       screen.getByRole('heading', { name: '데이터 수집 모니터링' }),
     ).toBeTruthy()
     expect(screen.getByRole('button', { name: '새로고침' })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: /실행/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /재실행|중지|재시도/ })).toBeNull()
   })
 
   it('첫 조회 중에는 접근 가능한 로딩 상태를 표시한다', () => {

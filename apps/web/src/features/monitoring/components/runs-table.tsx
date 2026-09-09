@@ -11,6 +11,7 @@ import {
   TableRow,
 } from '../../../components/ui/table'
 import type { CollectorRun, MonitoringStatus } from '../data/schema'
+import { formatCount } from '../data/format-count'
 import { collectorDisplayName } from './collector-card'
 import {
   formatSeoulDateTime,
@@ -158,6 +159,7 @@ export function RunsTable({
               <TableRow>
                 <TableHead>실행 ID</TableHead>
                 <TableHead>수집기</TableHead>
+                <TableHead>브랜드</TableHead>
                 <TableHead>상태</TableHead>
                 <TableHead>시작</TableHead>
                 <TableHead>원천</TableHead>
@@ -169,7 +171,7 @@ export function RunsTable({
             <TableBody>
               {runs.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
+                  <TableCell colSpan={9} className="h-24 text-center text-muted-foreground">
                     선택한 조건의 실행 이력이 없습니다.
                   </TableCell>
                 </TableRow>
@@ -187,13 +189,14 @@ export function RunsTable({
                       </button>
                     </TableCell>
                     <TableCell>{collectorDisplayName(run.collector_id)}</TableCell>
+                    <TableCell>{run.scope_name ?? '-'}</TableCell>
                     <TableCell>
                       <StatusBadge status={run.status} />
                     </TableCell>
                     <TableCell>{formatSeoulDateTime(run.started_at)}</TableCell>
-                    <TableCell>{run.source_count.toLocaleString('ko-KR')}</TableCell>
-                    <TableCell>{run.inserted_count.toLocaleString('ko-KR')}</TableCell>
-                    <TableCell>{run.changed_count.toLocaleString('ko-KR')}</TableCell>
+                    <TableCell>{formatCount(run.source_count)}</TableCell>
+                    <TableCell>{formatCount(run.inserted_count)}</TableCell>
+                    <TableCell>{formatCount(run.changed_count)}</TableCell>
                     <TableCell>{run.failed_units.toLocaleString('ko-KR')}</TableCell>
                   </TableRow>
                 ))

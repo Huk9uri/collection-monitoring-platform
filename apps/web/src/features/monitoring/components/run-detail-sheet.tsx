@@ -15,6 +15,7 @@ import {
   TableRow,
 } from '../../../components/ui/table'
 import type { CollectorAttempt, CollectorRun } from '../data/schema'
+import { formatCount } from '../data/format-count'
 import { formatSeoulDateTime, StatusBadge } from './monitoring-state'
 
 interface RunDetailSheetProps {
@@ -87,6 +88,10 @@ export function RunDetailSheet({
                 </dd>
               </div>
               <div>
+                <dt className="text-muted-foreground">브랜드</dt>
+                <dd className="mt-1 font-medium">{run.scope_name ?? '-'}</dd>
+              </div>
+              <div>
                 <dt className="text-muted-foreground">시작</dt>
                 <dd className="mt-1">{formatSeoulDateTime(run.started_at)}</dd>
               </div>
@@ -126,10 +131,10 @@ export function RunDetailSheet({
                         <TableCell>
                           <Badge variant={outcome.variant}>{outcome.label}</Badge>
                         </TableCell>
-                        <TableCell>{attempt.source_count.toLocaleString('ko-KR')}</TableCell>
-                        <TableCell>{attempt.inserted_count.toLocaleString('ko-KR')}</TableCell>
-                        <TableCell>{attempt.changed_count.toLocaleString('ko-KR')}</TableCell>
-                        <TableCell>{attempt.unchanged_count.toLocaleString('ko-KR')}</TableCell>
+                        <TableCell>{formatCount(attempt.source_count)}</TableCell>
+                        <TableCell>{formatCount(attempt.inserted_count)}</TableCell>
+                        <TableCell>{formatCount(attempt.changed_count)}</TableCell>
+                        <TableCell>{formatCount(attempt.unchanged_count)}</TableCell>
                         <TableCell>{attempt.error_category ?? '없음'}</TableCell>
                       </TableRow>
                     )
