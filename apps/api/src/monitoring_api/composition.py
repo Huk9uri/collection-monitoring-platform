@@ -93,6 +93,11 @@ def build_monitoring_service(settings: Settings) -> MonitoringService:
                 max_duration=timedelta(
                     minutes=settings.smartplace_max_duration_minutes
                 ),
+                attribution_window=timedelta(
+                    minutes=(
+                        settings.smartplace_schedule_attribution_window_minutes
+                    )
+                ),
                 expected_scopes=tuple(
                     ExpectedScope(scope_id=scope_id, scope_name=scope_name)
                     for scope_id, scope_name in settings.smartplace_expected_scopes.items()

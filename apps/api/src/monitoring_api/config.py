@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     smartplace_daily_scheduled_time: time | None = None
     smartplace_start_grace_minutes: PositiveInt | None = None
     smartplace_max_duration_minutes: PositiveInt | None = None
+    smartplace_schedule_attribution_window_minutes: PositiveInt = 60
     smartplace_expected_scopes: Annotated[
         dict[str, str], NoDecode
     ] = Field(default_factory=dict)

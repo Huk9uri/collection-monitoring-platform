@@ -48,6 +48,7 @@ class SmartPlacePolicy:
     start_grace: timedelta
     max_duration: timedelta
     expected_scopes: tuple[ExpectedScope, ...]
+    attribution_window: timedelta = timedelta(minutes=60)
 
     def __post_init__(self) -> None:
         ZoneInfo(self.schedule_timezone)
@@ -57,6 +58,8 @@ class SmartPlacePolicy:
             raise ValueError("SmartPlace 시작 유예시간은 양수여야 합니다.")
         if self.max_duration <= timedelta(0):
             raise ValueError("SmartPlace 최대 실행시간은 양수여야 합니다.")
+        if self.attribution_window <= timedelta(0):
+            raise ValueError("SmartPlace 예약 귀속 창은 양수여야 합니다.")
         if not self.expected_scopes:
             raise ValueError("SmartPlace 예상 scope가 하나 이상 필요합니다.")
         scope_ids = [scope.scope_id for scope in self.expected_scopes]
@@ -376,17 +379,11 @@ class SmartPlaceAdapter:
             tzinfo=timezone,
         )
         scheduled_at = local_scheduled_at.astimezone(UTC)
-        local_range_start = datetime.combine(
-            occurrence_date, time.min, tzinfo=timezone
-        )
-        local_range_end = datetime.combine(
-            occurrence_date + timedelta(days=1), time.min, tzinfo=timezone
-        )
         return _ScheduledOccurrence(
             scheduled_at=scheduled_at,
             local_scheduled_at=local_scheduled_at,
-            range_start=local_range_start.astimezone(UTC),
-            range_end=local_range_end.astimezone(UTC),
+            range_start=scheduled_at,
+            range_end=scheduled_at + self._policy.attribution_window,
         )
 
     def _synthetic_missing_runs(

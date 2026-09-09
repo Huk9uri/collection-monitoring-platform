@@ -92,6 +92,7 @@ def test_settings_loads_optional_connection_strings_as_masked_secrets(
         settings.smartplace_connection_string.get_secret_value()
         == SMARTPLACE_CONNECTION_STRING
     )
+    assert settings.smartplace_schedule_attribution_window_minutes == 60
     rendered = f"{settings!s} {settings!r}"
     assert "fcdaum-secret" not in rendered
     assert "hmr-secret" not in rendered
@@ -132,6 +133,7 @@ def test_composition_registers_smartplace_with_explicit_schedule_policy(
         smartplace_daily_scheduled_time="04:00",
         smartplace_start_grace_minutes=15,
         smartplace_max_duration_minutes=180,
+        smartplace_schedule_attribution_window_minutes=90,
         smartplace_expected_scopes="hanchon:한촌설렁탕,yuksoodang:육수당",
         _env_file=None,
     )
@@ -145,6 +147,7 @@ def test_composition_registers_smartplace_with_explicit_schedule_policy(
         "hanchon": "한촌설렁탕",
         "yuksoodang": "육수당",
     }
+    assert settings.smartplace_schedule_attribution_window_minutes == 90
     assert ReadyRepository.created_with == [SMARTPLACE_CONNECTION_STRING]
     assert ReadyRepository.created_timeouts == [(5, 30)]
 

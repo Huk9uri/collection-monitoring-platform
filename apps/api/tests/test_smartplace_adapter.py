@@ -155,7 +155,42 @@ def test_delayed_start_in_same_kst_schedule_date_is_not_marked_not_run() -> None
     assert [run.scope_id for run in runs].count("hanchon") == 1
     assert repository.calls[-1] == (
         SMARTPLACE_PRESENT_SCOPES_SQL,
-        (datetime(2026, 9, 10, 15), datetime(2026, 9, 11, 15)),
+        (datetime(2026, 9, 10, 19), datetime(2026, 9, 10, 20)),
+    )
+
+
+def test_manual_run_before_attribution_window_does_not_hide_scheduled_miss() -> None:
+    manual_hanchon = _run_row(
+        "55555555-5555-4555-8555-555555555555",
+        "hanchon",
+        "한촌설렁탕",
+        # 2026-09-11 00:30 KST 수동 실행은 04:00 예약 회차가 아니다.
+        scheduled_at=datetime(2026, 9, 10, 15, 30),
+        started_at=datetime(2026, 9, 10, 15, 30),
+    )
+    repository = FixtureRepository(
+        {
+            SMARTPLACE_LIST_SQL: [manual_hanchon],
+            SMARTPLACE_ATTEMPTS_FOR_RUNS_SQL: [],
+            SMARTPLACE_PRESENT_SCOPES_SQL: [],
+        }
+    )
+
+    runs = SmartPlaceAdapter(repository, policy=POLICY, clock=lambda: NOW).list_runs()
+
+    scheduled_misses = [
+        run
+        for run in runs
+        if run.status is MonitoringStatus.NOT_RUN
+    ]
+    assert [run.scope_id for run in scheduled_misses] == ["hanchon", "yuksoodang"]
+    assert any(
+        run.scope_id == "hanchon" and run.status is MonitoringStatus.SUCCESS
+        for run in runs
+    )
+    assert repository.calls[-1] == (
+        SMARTPLACE_PRESENT_SCOPES_SQL,
+        (datetime(2026, 9, 10, 19), datetime(2026, 9, 10, 20)),
     )
 
 
