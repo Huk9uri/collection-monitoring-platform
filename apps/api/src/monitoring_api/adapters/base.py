@@ -331,7 +331,7 @@ def _nullable_string(row: Mapping[str, object], key: str) -> str | None:
 
 
 def _confirmed_total(values: list[int | None]) -> int | None:
-    if any(value is None for value in values):
+    if not values or any(value is None for value in values):
         return None
     return sum(value for value in values if value is not None)
 

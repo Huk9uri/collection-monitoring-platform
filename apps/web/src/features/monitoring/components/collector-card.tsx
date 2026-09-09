@@ -1,5 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from '../../../components/ui/card'
 import type { CollectorSummary } from '../data/schema'
+import { formatCount } from '../data/format-count'
 import { formatSeoulDateTime, StatusBadge } from './monitoring-state'
 
 export function collectorDisplayName(collectorId: string) {
@@ -42,9 +43,9 @@ export function CollectorCard({ summary }: { summary: CollectorSummary }) {
           <div className="col-span-2 flex items-center justify-between border-t pt-3">
             <dt className="text-muted-foreground">신규 / 변경 / 동일</dt>
             <dd className="font-medium tabular-nums">
-              {(run?.inserted_count ?? 0).toLocaleString('ko-KR')} /{' '}
-              {(run?.changed_count ?? 0).toLocaleString('ko-KR')} /{' '}
-              {(run?.unchanged_count ?? 0).toLocaleString('ko-KR')}
+              {formatCount(run?.inserted_count ?? null)} /{' '}
+              {formatCount(run?.changed_count ?? null)} /{' '}
+              {formatCount(run?.unchanged_count ?? null)}
             </dd>
           </div>
         </dl>
