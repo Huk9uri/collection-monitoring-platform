@@ -303,16 +303,14 @@ class SmartPlaceAdapter:
         }
         run = run_from_row(self.collector_id, mapped_row, attempts)
         canonical = row.get("canonical_status")
-        if canonical is not None:
-            run = run.model_copy(update={"status": MonitoringStatus(str(canonical))})
-        raw_status = map_raw_status(str(row["raw_status"]))
-        effective_status = max(
-            (run.status, raw_status),
-            key=lambda status: _STATUS_SEVERITY[status],
+        authoritative_status = (
+            MonitoringStatus(str(canonical))
+            if canonical is not None
+            else map_raw_status(str(row["raw_status"]))
         )
         run = run.model_copy(
             update={
-                "status": effective_status,
+                "status": authoritative_status,
                 # 생산자가 account_key별 결과에서 login을 제외해 확정한 집계다.
                 "successful_units": int(row.get("successful_units") or 0),
                 "failed_units": int(row.get("failed_units") or 0),

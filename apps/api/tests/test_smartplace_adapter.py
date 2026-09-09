@@ -183,6 +183,38 @@ def test_login_success_does_not_reduce_raw_collection_failure() -> None:
     assert [attempt.unit_id for attempt in run.attempts] == ["login", "normal"]
 
 
+def test_all_accounts_success_is_success_in_both_list_and_detail() -> None:
+    run_row = {
+        **_run_row(RUN_ID_HANCHON, "hanchon", "한촌설렁탕"),
+        "successful_units": 4,
+        "failed_units": 0,
+    }
+    attempts = [
+        _attempt_row(RUN_ID_HANCHON, "normal", attempt_no=1),
+        _attempt_row(RUN_ID_HANCHON, "normal", attempt_no=2),
+        _attempt_row(RUN_ID_HANCHON, "pos_linked", attempt_no=1),
+        _attempt_row(RUN_ID_HANCHON, "pos_linked", attempt_no=2),
+    ]
+    repository = FixtureRepository(
+        {
+            SMARTPLACE_LIST_SQL: [{**run_row, "canonical_status": "SUCCESS"}],
+            SMARTPLACE_ATTEMPTS_FOR_RUNS_SQL: attempts,
+            SMARTPLACE_RUN_SQL: [run_row],
+            SMARTPLACE_ATTEMPTS_SQL: attempts,
+        }
+    )
+    adapter = SmartPlaceAdapter(repository)
+
+    listed = adapter.list_runs(limit=1)[0]
+    detailed = adapter.get_run(UUID(RUN_ID_HANCHON))
+
+    assert detailed is not None
+    assert listed.status is MonitoringStatus.SUCCESS
+    assert detailed.status is MonitoringStatus.SUCCESS
+    assert (listed.successful_units, listed.failed_units) == (4, 0)
+    assert (detailed.successful_units, detailed.failed_units) == (4, 0)
+
+
 def test_delayed_start_in_same_kst_schedule_date_is_not_marked_not_run() -> None:
     hanchon = _run_row(
         RUN_ID_HANCHON,
