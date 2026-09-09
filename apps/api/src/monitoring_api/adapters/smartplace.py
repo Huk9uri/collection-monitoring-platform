@@ -60,6 +60,10 @@ class SmartPlacePolicy:
             raise ValueError("SmartPlace 최대 실행시간은 양수여야 합니다.")
         if self.attribution_window <= timedelta(0):
             raise ValueError("SmartPlace 예약 귀속 창은 양수여야 합니다.")
+        if self.attribution_window < self.start_grace:
+            raise ValueError("SmartPlace 예약 귀속 창은 시작 유예시간 이상이어야 합니다.")
+        if self.attribution_window >= timedelta(days=1):
+            raise ValueError("SmartPlace 예약 귀속 창은 일일 주기보다 짧아야 합니다.")
         if not self.expected_scopes:
             raise ValueError("SmartPlace 예상 scope가 하나 이상 필요합니다.")
         scope_ids = [scope.scope_id for scope in self.expected_scopes]

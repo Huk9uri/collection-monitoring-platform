@@ -179,6 +179,48 @@ def test_settings_requires_complete_smartplace_policy() -> None:
         )
 
 
+@pytest.mark.parametrize("attribution_window_minutes", [5, 1500])
+def test_settings_rejects_invalid_smartplace_attribution_window_relationship(
+    attribution_window_minutes: int,
+) -> None:
+    with pytest.raises(ValueError, match="귀속 창"):
+        Settings(
+            smartplace_connection_string=SMARTPLACE_CONNECTION_STRING,
+            smartplace_schedule_timezone="Asia/Seoul",
+            smartplace_daily_scheduled_time="04:00",
+            smartplace_start_grace_minutes=15,
+            smartplace_max_duration_minutes=180,
+            smartplace_schedule_attribution_window_minutes=(
+                attribution_window_minutes
+            ),
+            smartplace_expected_scopes=(
+                "hanchon:한촌설렁탕,yuksoodang:육수당"
+            ),
+            _env_file=None,
+        )
+
+
+@pytest.mark.parametrize("attribution_window_minutes", [15, 1439])
+def test_settings_accepts_smartplace_attribution_window_boundaries(
+    attribution_window_minutes: int,
+) -> None:
+    settings = Settings(
+        smartplace_connection_string=SMARTPLACE_CONNECTION_STRING,
+        smartplace_schedule_timezone="Asia/Seoul",
+        smartplace_daily_scheduled_time="04:00",
+        smartplace_start_grace_minutes=15,
+        smartplace_max_duration_minutes=180,
+        smartplace_schedule_attribution_window_minutes=attribution_window_minutes,
+        smartplace_expected_scopes="hanchon:한촌설렁탕,yuksoodang:육수당",
+        _env_file=None,
+    )
+
+    assert (
+        settings.smartplace_schedule_attribution_window_minutes
+        == attribution_window_minutes
+    )
+
+
 def test_composition_applies_explicit_collector_policy_and_deadlines(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

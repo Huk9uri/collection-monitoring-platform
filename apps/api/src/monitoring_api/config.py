@@ -200,6 +200,19 @@ class Settings(BaseSettings):
                 "smartplace 일정, 시작 유예, 최대 실행시간과 예상 scope는 "
                 "함께 설정해야 합니다."
             )
+        if smartplace_is_configured:
+            assert self.smartplace_start_grace_minutes is not None
+            attribution_window = (
+                self.smartplace_schedule_attribution_window_minutes
+            )
+            if attribution_window < self.smartplace_start_grace_minutes:
+                raise ValueError(
+                    "smartplace 예약 귀속 창은 시작 유예시간 이상이어야 합니다."
+                )
+            if attribution_window >= 24 * 60:
+                raise ValueError(
+                    "smartplace 예약 귀속 창은 일일 주기보다 짧아야 합니다."
+                )
         return self
 
 
