@@ -19,6 +19,8 @@ const validRun = {
   status: 'SUCCESS',
   successful_units: 2,
   failed_units: 0,
+  scope_id: null,
+  scope_name: null,
   source_count: 10,
   inserted_count: 4,
   changed_count: 2,
@@ -97,6 +99,37 @@ describe('FastAPI 응답 계약', () => {
       collectorRunSchema.safeParse({ ...validRun, run_id: 'run-20260908' })
         .success,
     ).toBe(false)
+  })
+
+  it('브랜드 범위와 실패 전 미확정 집계를 보존한다', () => {
+    const smartplaceRun = {
+      ...validRun,
+      collector_id: 'smartplace',
+      scope_id: 'hanchon',
+      scope_name: '한촌설렁탕',
+      source_count: null,
+      inserted_count: null,
+      changed_count: null,
+      unchanged_count: null,
+      attempts: [
+        {
+          ...validRun.attempts[0],
+          source_count: null,
+          inserted_count: null,
+          changed_count: null,
+          unchanged_count: null,
+        },
+      ],
+    }
+
+    expect(collectorRunSchema.parse(smartplaceRun)).toMatchObject({
+      scope_id: 'hanchon',
+      scope_name: '한촌설렁탕',
+      source_count: null,
+      inserted_count: null,
+      changed_count: null,
+      unchanged_count: null,
+    })
   })
 
   it('하위 시도에 canonical outcome과 원시 상태를 함께 요구한다', () => {

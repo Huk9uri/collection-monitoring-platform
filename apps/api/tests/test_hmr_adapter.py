@@ -66,6 +66,12 @@ def test_hmr_partial_status_maps_to_partial_failed() -> None:
 
     assert run is not None
     assert run.status is MonitoringStatus.PARTIAL_FAILED
+    assert run.scope_id is None
+    assert run.scope_name is None
+    assert run.source_count is None
+    assert run.inserted_count is None
+    assert run.changed_count is None
+    assert run.unchanged_count is None
 
 
 def test_hmr_success_with_data_is_a_canonical_success_end_to_end() -> None:

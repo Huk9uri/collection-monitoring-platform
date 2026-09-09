@@ -21,6 +21,10 @@ HMR_CONNECTION_STRING = (
     "Driver={ODBC Driver 18 for SQL Server};Server=hmr-db;"
     "Database=hmr;UID=monitor_hmr;PWD=hmr-secret"
 )
+SMARTPLACE_CONNECTION_STRING = (
+    "Driver={ODBC Driver 18 for SQL Server};Server=naver-db;"
+    "Database=naverDB;UID=monitor_smartplace;PWD=smartplace-secret"
+)
 
 
 class ReadyRepository:
@@ -62,19 +66,37 @@ def test_settings_loads_optional_connection_strings_as_masked_secrets(
 ) -> None:
     monkeypatch.setenv("MONITORING_FCDAUM_CONNECTION_STRING", FCDAUM_CONNECTION_STRING)
     monkeypatch.setenv("MONITORING_HMR_CONNECTION_STRING", HMR_CONNECTION_STRING)
+    monkeypatch.setenv(
+        "MONITORING_SMARTPLACE_CONNECTION_STRING", SMARTPLACE_CONNECTION_STRING
+    )
+    monkeypatch.setenv("MONITORING_SMARTPLACE_SCHEDULE_TIMEZONE", "Asia/Seoul")
+    monkeypatch.setenv("MONITORING_SMARTPLACE_DAILY_SCHEDULED_TIME", "04:00")
+    monkeypatch.setenv("MONITORING_SMARTPLACE_START_GRACE_MINUTES", "15")
+    monkeypatch.setenv("MONITORING_SMARTPLACE_MAX_DURATION_MINUTES", "180")
+    monkeypatch.setenv(
+        "MONITORING_SMARTPLACE_EXPECTED_SCOPES",
+        "hanchon:한촌설렁탕,yuksoodang:육수당",
+    )
 
     settings = Settings(_env_file=None)
 
     assert isinstance(settings.fcdaum_connection_string, SecretStr)
     assert isinstance(settings.hmr_connection_string, SecretStr)
+    assert isinstance(settings.smartplace_connection_string, SecretStr)
     assert (
         settings.fcdaum_connection_string.get_secret_value()
         == FCDAUM_CONNECTION_STRING
     )
     assert settings.hmr_connection_string.get_secret_value() == HMR_CONNECTION_STRING
+    assert (
+        settings.smartplace_connection_string.get_secret_value()
+        == SMARTPLACE_CONNECTION_STRING
+    )
+    assert settings.smartplace_schedule_attribution_window_minutes == 60
     rendered = f"{settings!s} {settings!r}"
     assert "fcdaum-secret" not in rendered
     assert "hmr-secret" not in rendered
+    assert "smartplace-secret" not in rendered
     assert "**********" in rendered
 
 
@@ -99,6 +121,104 @@ def test_composition_registers_both_configured_sources(
         HMR_CONNECTION_STRING,
     ]
     assert ReadyRepository.created_timeouts == [(5, 30), (5, 30)]
+
+
+def test_composition_registers_smartplace_with_explicit_schedule_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(composition, "ReadOnlyRepository", ReadyRepository)
+    settings = Settings(
+        smartplace_connection_string=SMARTPLACE_CONNECTION_STRING,
+        smartplace_schedule_timezone="Asia/Seoul",
+        smartplace_daily_scheduled_time="04:00",
+        smartplace_start_grace_minutes=15,
+        smartplace_max_duration_minutes=180,
+        smartplace_schedule_attribution_window_minutes=90,
+        smartplace_expected_scopes="hanchon:한촌설렁탕,yuksoodang:육수당",
+        _env_file=None,
+    )
+
+    result = build_monitoring_service(settings).readiness()
+
+    assert [item.model_dump() for item in result.items] == [
+        {"collector_id": "smartplace", "ready": True}
+    ]
+    assert settings.smartplace_expected_scopes == {
+        "hanchon": "한촌설렁탕",
+        "yuksoodang": "육수당",
+    }
+    assert settings.smartplace_schedule_attribution_window_minutes == 90
+    assert ReadyRepository.created_with == [SMARTPLACE_CONNECTION_STRING]
+    assert ReadyRepository.created_timeouts == [(5, 30)]
+
+
+@pytest.mark.parametrize(
+    "expected_scopes",
+    ["hanchon", "hanchon:", ":한촌설렁탕", "hanchon:한촌,hanchon:중복"],
+)
+def test_settings_rejects_invalid_smartplace_expected_scopes(
+    expected_scopes: str,
+) -> None:
+    with pytest.raises(ValueError, match="scope"):
+        Settings(
+            smartplace_connection_string=SMARTPLACE_CONNECTION_STRING,
+            smartplace_schedule_timezone="Asia/Seoul",
+            smartplace_daily_scheduled_time="04:00",
+            smartplace_start_grace_minutes=15,
+            smartplace_max_duration_minutes=180,
+            smartplace_expected_scopes=expected_scopes,
+            _env_file=None,
+        )
+
+
+def test_settings_requires_complete_smartplace_policy() -> None:
+    with pytest.raises(ValueError, match="smartplace"):
+        Settings(
+            smartplace_connection_string=SMARTPLACE_CONNECTION_STRING,
+            _env_file=None,
+        )
+
+
+@pytest.mark.parametrize("attribution_window_minutes", [5, 1500])
+def test_settings_rejects_invalid_smartplace_attribution_window_relationship(
+    attribution_window_minutes: int,
+) -> None:
+    with pytest.raises(ValueError, match="귀속 창"):
+        Settings(
+            smartplace_connection_string=SMARTPLACE_CONNECTION_STRING,
+            smartplace_schedule_timezone="Asia/Seoul",
+            smartplace_daily_scheduled_time="04:00",
+            smartplace_start_grace_minutes=15,
+            smartplace_max_duration_minutes=180,
+            smartplace_schedule_attribution_window_minutes=(
+                attribution_window_minutes
+            ),
+            smartplace_expected_scopes=(
+                "hanchon:한촌설렁탕,yuksoodang:육수당"
+            ),
+            _env_file=None,
+        )
+
+
+@pytest.mark.parametrize("attribution_window_minutes", [15, 1439])
+def test_settings_accepts_smartplace_attribution_window_boundaries(
+    attribution_window_minutes: int,
+) -> None:
+    settings = Settings(
+        smartplace_connection_string=SMARTPLACE_CONNECTION_STRING,
+        smartplace_schedule_timezone="Asia/Seoul",
+        smartplace_daily_scheduled_time="04:00",
+        smartplace_start_grace_minutes=15,
+        smartplace_max_duration_minutes=180,
+        smartplace_schedule_attribution_window_minutes=attribution_window_minutes,
+        smartplace_expected_scopes="hanchon:한촌설렁탕,yuksoodang:육수당",
+        _env_file=None,
+    )
+
+    assert (
+        settings.smartplace_schedule_attribution_window_minutes
+        == attribution_window_minutes
+    )
 
 
 def test_composition_applies_explicit_collector_policy_and_deadlines(

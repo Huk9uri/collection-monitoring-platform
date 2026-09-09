@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     cors_origins: Annotated[tuple[str, ...], NoDecode] = ()
     fcdaum_connection_string: SecretStr | None = None
     hmr_connection_string: SecretStr | None = None
+    smartplace_connection_string: SecretStr | None = None
     db_connect_timeout_seconds: PositiveInt = 5
     db_query_timeout_seconds: PositiveInt = 30
     source_timeout_seconds: PositiveFloat = 35.0
@@ -51,6 +52,14 @@ class Settings(BaseSettings):
     hmr_max_duration_minutes: PositiveInt | None = None
     hmr_freshness_sla_minutes: Annotated[
         dict[str, PositiveInt], NoDecode
+    ] = Field(default_factory=dict)
+    smartplace_schedule_timezone: str | None = None
+    smartplace_daily_scheduled_time: time | None = None
+    smartplace_start_grace_minutes: PositiveInt | None = None
+    smartplace_max_duration_minutes: PositiveInt | None = None
+    smartplace_schedule_attribution_window_minutes: PositiveInt = 60
+    smartplace_expected_scopes: Annotated[
+        dict[str, str], NoDecode
     ] = Field(default_factory=dict)
 
     model_config = SettingsConfigDict(
@@ -92,7 +101,11 @@ class Settings(BaseSettings):
                 )
         return origins
 
-    @field_validator("fcdaum_schedule_timezone", "hmr_schedule_timezone")
+    @field_validator(
+        "fcdaum_schedule_timezone",
+        "hmr_schedule_timezone",
+        "smartplace_schedule_timezone",
+    )
     @classmethod
     def require_known_timezone(cls, value: str | None) -> str | None:
         if value is None:
@@ -123,6 +136,28 @@ class Settings(BaseSettings):
                 raise ValueError("신선도 SLA minutes는 정수여야 합니다.") from exc
         return parsed
 
+    @field_validator("smartplace_expected_scopes", mode="before")
+    @classmethod
+    def parse_smartplace_expected_scopes(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        parsed: dict[str, str] = {}
+        for entry in value.split(","):
+            scope_id, separator, scope_name = entry.strip().partition(":")
+            scope_id = scope_id.strip()
+            scope_name = scope_name.strip()
+            if (
+                not separator
+                or not scope_id
+                or not scope_name
+                or scope_id in parsed
+            ):
+                raise ValueError(
+                    "SmartPlace 예상 scope는 scope_id:표시명 형식이어야 합니다."
+                )
+            parsed[scope_id] = scope_name
+        return parsed
+
     @model_validator(mode="after")
     def require_complete_collector_policies(self) -> "Settings":
         for collector_id in ("fcdaum", "hmr"):
@@ -146,6 +181,37 @@ class Settings(BaseSettings):
             if unknown:
                 raise ValueError(
                     f"{collector_id} 알 수 없는 신선도 데이터셋: {sorted(unknown)}"
+                )
+
+        smartplace_policy_values = (
+            self.smartplace_schedule_timezone,
+            self.smartplace_daily_scheduled_time,
+            self.smartplace_start_grace_minutes,
+            self.smartplace_max_duration_minutes,
+            self.smartplace_expected_scopes or None,
+        )
+        smartplace_is_configured = self.smartplace_connection_string is not None or any(
+            value is not None for value in smartplace_policy_values
+        )
+        if smartplace_is_configured and any(
+            value is None for value in smartplace_policy_values
+        ):
+            raise ValueError(
+                "smartplace 일정, 시작 유예, 최대 실행시간과 예상 scope는 "
+                "함께 설정해야 합니다."
+            )
+        if smartplace_is_configured:
+            assert self.smartplace_start_grace_minutes is not None
+            attribution_window = (
+                self.smartplace_schedule_attribution_window_minutes
+            )
+            if attribution_window < self.smartplace_start_grace_minutes:
+                raise ValueError(
+                    "smartplace 예약 귀속 창은 시작 유예시간 이상이어야 합니다."
+                )
+            if attribution_window >= 24 * 60:
+                raise ValueError(
+                    "smartplace 예약 귀속 창은 일일 주기보다 짧아야 합니다."
                 )
         return self
 
