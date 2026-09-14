@@ -35,32 +35,42 @@ class Settings(BaseSettings):
     """배포 환경에서 주입되는 API 설정이다."""
 
     cors_origins: Annotated[tuple[str, ...], NoDecode] = ()
+    control_connection_string: SecretStr | None = None
+    production: bool = False
+    allowed_hosts: Annotated[tuple[str, ...], NoDecode] = ()
     fcdaum_connection_string: SecretStr | None = None
     hmr_connection_string: SecretStr | None = None
     smartplace_connection_string: SecretStr | None = None
+    naver_store_hours_connection_string: SecretStr | None = None
+    naver_store_hours_schedule_timezone: str | None = None
+    naver_store_hours_weekly_scheduled_day: int | None = Field(default=None, ge=0, le=6)
+    naver_store_hours_weekly_scheduled_time: time | None = None
+    naver_store_hours_start_grace_minutes: PositiveInt | None = None
+    naver_store_hours_max_duration_minutes: PositiveInt | None = None
+    naver_store_hours_schedule_attribution_window_minutes: PositiveInt | None = None
     db_connect_timeout_seconds: PositiveInt = 5
     db_query_timeout_seconds: PositiveInt = 30
     source_timeout_seconds: PositiveFloat = 35.0
     fcdaum_schedule_timezone: str | None = None
     fcdaum_daily_scheduled_time: time | None = None
     fcdaum_max_duration_minutes: PositiveInt | None = None
-    fcdaum_freshness_sla_minutes: Annotated[
-        dict[str, PositiveInt], NoDecode
-    ] = Field(default_factory=dict)
+    fcdaum_freshness_sla_minutes: Annotated[dict[str, PositiveInt], NoDecode] = Field(
+        default_factory=dict
+    )
     hmr_schedule_timezone: str | None = None
     hmr_daily_scheduled_time: time | None = None
     hmr_max_duration_minutes: PositiveInt | None = None
-    hmr_freshness_sla_minutes: Annotated[
-        dict[str, PositiveInt], NoDecode
-    ] = Field(default_factory=dict)
+    hmr_freshness_sla_minutes: Annotated[dict[str, PositiveInt], NoDecode] = Field(
+        default_factory=dict
+    )
     smartplace_schedule_timezone: str | None = None
     smartplace_daily_scheduled_time: time | None = None
     smartplace_start_grace_minutes: PositiveInt | None = None
     smartplace_max_duration_minutes: PositiveInt | None = None
     smartplace_schedule_attribution_window_minutes: PositiveInt = 60
-    smartplace_expected_scopes: Annotated[
-        dict[str, str], NoDecode
-    ] = Field(default_factory=dict)
+    smartplace_expected_scopes: Annotated[dict[str, str], NoDecode] = Field(
+        default_factory=dict
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="MONITORING_",
@@ -68,11 +78,13 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    @field_validator("cors_origins", mode="before")
+    @field_validator("cors_origins", "allowed_hosts", mode="before")
     @classmethod
     def split_cors_origins(cls, value: object) -> object:
         if isinstance(value, str):
-            return tuple(origin.strip() for origin in value.split(",") if origin.strip())
+            return tuple(
+                origin.strip() for origin in value.split(",") if origin.strip()
+            )
         return value
 
     @field_validator("cors_origins")
@@ -105,6 +117,7 @@ class Settings(BaseSettings):
         "fcdaum_schedule_timezone",
         "hmr_schedule_timezone",
         "smartplace_schedule_timezone",
+        "naver_store_hours_schedule_timezone",
     )
     @classmethod
     def require_known_timezone(cls, value: str | None) -> str | None:
@@ -146,12 +159,7 @@ class Settings(BaseSettings):
             scope_id, separator, scope_name = entry.strip().partition(":")
             scope_id = scope_id.strip()
             scope_name = scope_name.strip()
-            if (
-                not separator
-                or not scope_id
-                or not scope_name
-                or scope_id in parsed
-            ):
+            if not separator or not scope_id or not scope_name or scope_id in parsed:
                 raise ValueError(
                     "SmartPlace 예상 scope는 scope_id:표시명 형식이어야 합니다."
                 )
@@ -160,6 +168,32 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def require_complete_collector_policies(self) -> "Settings":
+        if self.production and (not self.allowed_hosts or any('*' in host for host in self.allowed_hosts) or not self.cors_origins
+                                or any(not origin.startswith('https://') for origin in self.cors_origins)):
+            raise ValueError("운영 환경에는 HTTPS Origin과 허용 Host가 필요합니다.")
+        store_policy = (
+            self.naver_store_hours_schedule_timezone,
+            self.naver_store_hours_weekly_scheduled_day,
+            self.naver_store_hours_weekly_scheduled_time,
+            self.naver_store_hours_start_grace_minutes,
+            self.naver_store_hours_max_duration_minutes,
+            self.naver_store_hours_schedule_attribution_window_minutes,
+        )
+        if any(value is not None for value in store_policy):
+            if any(value is None for value in store_policy):
+                raise ValueError(
+                    "영업시간 주간 일정 정책은 모든 값을 함께 설정해야 합니다."
+                )
+            if self.naver_store_hours_weekly_scheduled_time.tzinfo is not None:
+                raise ValueError("예정 시각은 현지 시각이어야 합니다.")
+            if (
+                not self.naver_store_hours_start_grace_minutes
+                <= self.naver_store_hours_schedule_attribution_window_minutes
+                < 10080
+            ):
+                raise ValueError(
+                    "귀속 창은 시작 유예 이상이며 주간 주기보다 짧아야 합니다."
+                )
         for collector_id in ("fcdaum", "hmr"):
             schedule_timezone = getattr(self, f"{collector_id}_schedule_timezone")
             scheduled_time = getattr(self, f"{collector_id}_daily_scheduled_time")
@@ -202,9 +236,7 @@ class Settings(BaseSettings):
             )
         if smartplace_is_configured:
             assert self.smartplace_start_grace_minutes is not None
-            attribution_window = (
-                self.smartplace_schedule_attribution_window_minutes
-            )
+            attribution_window = self.smartplace_schedule_attribution_window_minutes
             if attribution_window < self.smartplace_start_grace_minutes:
                 raise ValueError(
                     "smartplace 예약 귀속 창은 시작 유예시간 이상이어야 합니다."

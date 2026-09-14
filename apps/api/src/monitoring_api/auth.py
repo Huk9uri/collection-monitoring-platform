@@ -1,10 +1,18 @@
-"""MVP의 익명 조회 권한과 향후 인증 교체 지점을 제공한다."""
+"""서버 세션 인증과 API 역할·CSRF 경계를 제공한다."""
 
 from collections.abc import Callable
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, status
-from pydantic import BaseModel
+from datetime import UTC, datetime
+import hmac
+from urllib.parse import urlsplit
+
+from fastapi import Depends, HTTPException, Request, status
+from pydantic import BaseModel, Field
+
+from monitoring_api.control_db import build_control_database
+from monitoring_api.repositories.session import SessionRepository
+from monitoring_api.security import token_hash, SESSION_IDLE_HOURS
 
 from monitoring_api.models import Role
 
@@ -13,6 +21,10 @@ class CurrentUser(BaseModel):
     """인증 공급자와 무관하게 사용하는 현재 사용자 표현이다."""
 
     roles: frozenset[Role]
+    user_id: str = ''
+    username: str = ''
+    session_id: str = ''
+    csrf_hash: bytes = Field(default=b'', exclude=True, repr=False)
 
     def has_role(self, role: Role) -> bool:
         """사용자가 요청된 역할을 보유하는지 반환한다."""
@@ -20,10 +32,43 @@ class CurrentUser(BaseModel):
         return role in self.roles
 
 
-def get_current_user() -> CurrentUser:
-    """MVP에서는 인증되지 않은 요청도 조회자 역할로 제한한다."""
+def get_session_repository(request: Request) -> SessionRepository:
+    if getattr(request.app.state, 'session_repository', None) is not None:
+        return request.app.state.session_repository
+    return SessionRepository(build_control_database(request.app.state.settings))
 
-    return CurrentUser(roles=frozenset({Role.VIEWER}))
+
+def get_current_user(request: Request) -> CurrentUser:
+    token = request.cookies.get('__Host-monitoring-session')
+    if not token or len(token) > 128:
+        raise HTTPException(401, '로그인이 필요합니다.')
+    record = get_session_repository(request).authenticate(
+        token_hash(token), datetime.now(UTC).replace(tzinfo=None), SESSION_IDLE_HOURS
+    )
+    if not record:
+        raise HTTPException(401, '로그인이 필요합니다.')
+    role = Role(record.pop('role'))
+    roles = {role, Role.VIEWER} if role == Role.ADMIN else {role}
+    return CurrentUser(roles=roles, **record)
+
+
+def check_origin(request: Request) -> None:
+    origin = request.headers.get('origin')
+    if origin is None and request.method == 'GET':
+        referer = urlsplit(request.headers.get('referer', ''))
+        origin = f'{referer.scheme}://{referer.netloc}'
+    if origin not in request.app.state.settings.cors_origins:
+        raise HTTPException(403, '허용되지 않은 요청 출처입니다.')
+    if request.url.scheme != 'https':
+        raise HTTPException(403, '로그인 요청은 HTTPS가 필요합니다.')
+
+
+def require_csrf(request: Request, user: Annotated[CurrentUser, Depends(get_current_user)]) -> CurrentUser:
+    check_origin(request)
+    token = request.headers.get('x-csrf-token', '')
+    if not token or len(token) > 128 or not hmac.compare_digest(token_hash(token), user.csrf_hash):
+        raise HTTPException(403, '요청 인증을 갱신한 뒤 다시 시도하세요.')
+    return user
 
 
 def require_role(required_role: Role) -> Callable[[CurrentUser], CurrentUser]:

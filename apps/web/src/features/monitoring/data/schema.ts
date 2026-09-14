@@ -22,6 +22,7 @@ const MAX_RUN_RANGE_MILLISECONDS = 93 * 24 * 60 * 60 * 1_000
 export const runsQueryConditionsSchema = z
   .object({
     collectorId: z.string().optional(),
+    scopeId: z.string().optional(),
     startedFrom: utcDateTimeSchema.optional(),
     startedTo: utcDateTimeSchema.optional(),
     status: monitoringStatusSchema.optional(),
@@ -55,6 +56,10 @@ export const runDetailConditionsSchema = z.object({
 })
 
 export const collectorAttemptSchema = z.object({
+  child_run_id: z.uuid().nullable().optional(),
+  stage: z.enum(['dry-run', 'apply']).nullable().optional(),
+  store_codes: z.array(z.string()).nullable().optional(),
+  timing_basis: z.enum(['worker-report', 'parent-window']).nullable().optional(),
   unit_id: z.string(),
   unit_name: z.string(),
   attempt_no: z.number().int(),
@@ -73,6 +78,16 @@ export const collectorAttemptSchema = z.object({
 export const collectorRunSchema = z.object({
   collector_id: z.string(),
   run_id: z.uuid(),
+  parent_run_id: z.uuid().nullable().optional(),
+  raw_status: z.string().nullable().optional(),
+  execution_kind: z.enum(['scheduled', 'preflight-only']).nullable().optional(),
+  review_count: z.number().int().nonnegative().nullable().optional(),
+  failure_count: z.number().int().nonnegative().nullable().optional(),
+  applied_count: z.number().int().nonnegative().nullable().optional(),
+  coverage_count: z.number().int().nonnegative().nullable().optional(),
+  committed: z.boolean().nullable().optional(),
+  successful_check_at: utcDateTimeSchema.nullable().optional(),
+  error_category: z.string().nullable().optional(),
   scheduled_date: z.iso.date(),
   started_at: utcDateTimeSchema,
   completed_at: utcDateTimeSchema.nullable(),
@@ -91,6 +106,10 @@ export const collectorRunSchema = z.object({
 export const freshnessRecordSchema = z.object({
   collector_id: z.string(),
   dataset_id: z.string(),
+  scope_id: z.string().nullable().optional(),
+  scope_name: z.string().nullable().optional(),
+  coverage_count: z.number().int().nonnegative().nullable().optional(),
+  source_count: z.number().int().nonnegative().nullable().optional(),
   last_successful_check_at: utcDateTimeSchema.nullable(),
   latest_data_at: utcDateTimeSchema.nullable(),
   freshness_sla_minutes: z.number().int().positive().nullable(),
@@ -98,6 +117,9 @@ export const freshnessRecordSchema = z.object({
 })
 
 export const collectorSummarySchema = z.object({
+  policy_source: z.string().optional(),
+  policy_warning: z.string().nullable().optional(),
+  policy_updated_at: z.string().nullable().optional(),
   collector_id: z.string(),
   display_name: z.string(),
   status: monitoringStatusSchema,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
-from typing import Protocol
+from typing import Literal, Protocol
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
@@ -15,6 +15,10 @@ from monitoring_api.models import MonitoringStatus
 class CollectorAttempt(BaseModel):
     """한 브랜드 또는 채널의 단일 수집 시도다."""
 
+    timing_basis: Literal["worker-report", "parent-window"] | None = None
+    child_run_id: UUID | None = None
+    stage: Literal["dry-run", "apply"] | None = None
+    store_codes: list[str] | None = None
     unit_id: str
     unit_name: str
     attempt_no: int
@@ -52,6 +56,16 @@ class CollectorRun(BaseModel):
     unchanged_count: int | None
     scope_id: str | None = None
     scope_name: str | None = None
+    parent_run_id: UUID | None = None
+    raw_status: str | None = None
+    execution_kind: Literal["scheduled", "preflight-only"] | None = None
+    review_count: int | None = None
+    failure_count: int | None = None
+    applied_count: int | None = None
+    coverage_count: int | None = None
+    committed: bool | None = None
+    successful_check_at: datetime | None = None
+    error_category: str | None = None
     attempts: list[CollectorAttempt] = Field(default_factory=list)
 
     @field_validator("started_at", "completed_at")
@@ -67,6 +81,10 @@ class FreshnessRecord(BaseModel):
     dataset_id: str
     last_successful_check_at: datetime | None = None
     latest_data_at: datetime | None
+    scope_id: str | None = None
+    scope_name: str | None = None
+    coverage_count: int | None = None
+    source_count: int | None = None
     freshness_sla_minutes: int | None = None
     freshness_overdue: bool = False
 
@@ -161,6 +179,7 @@ def map_raw_status(raw_status: str) -> MonitoringStatus:
         "SUCCESS_EMPTY": MonitoringStatus.SUCCESS_EMPTY,
         "WARNING": MonitoringStatus.WARNING,
         "PARTIAL": MonitoringStatus.PARTIAL_FAILED,
+        "PARTIAL_FAILURE": MonitoringStatus.PARTIAL_FAILED,
         "PARTIAL_FAILED": MonitoringStatus.PARTIAL_FAILED,
         "FAILED": MonitoringStatus.FAILED,
         "RUNNING": MonitoringStatus.RUNNING,
@@ -302,15 +321,11 @@ def run_from_row(
         status=derive_run_status(attempts, raw_status=str(row["raw_status"])),
         successful_units=successful_units,
         failed_units=failed_units,
-        source_count=_confirmed_total(
-            [attempt.source_count for attempt in selected]
-        ),
+        source_count=_confirmed_total([attempt.source_count for attempt in selected]),
         inserted_count=_confirmed_total(
             [attempt.inserted_count for attempt in selected]
         ),
-        changed_count=_confirmed_total(
-            [attempt.changed_count for attempt in selected]
-        ),
+        changed_count=_confirmed_total([attempt.changed_count for attempt in selected]),
         unchanged_count=_confirmed_total(
             [attempt.unchanged_count for attempt in selected]
         ),

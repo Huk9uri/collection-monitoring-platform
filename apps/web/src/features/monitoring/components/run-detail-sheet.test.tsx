@@ -217,3 +217,44 @@ describe('RunDetailSheet', () => {
     expect(screen.getAllByText('-').length).toBeGreaterThan(0)
   })
 })
+
+it('네이버 사전 점검의 품질과 원시 결과 및 미확정 적용 집계를 구분한다', () => {
+  const run = { ...smartPlaceRun, collector_id: 'naver-store-hours', status: 'WARNING' as const,
+    raw_status: 'SUCCESS', execution_kind: 'preflight-only' as const,
+    parent_run_id: '00000000-0000-4000-8000-000000000099',
+    review_count: 2, failure_count: 0, coverage_count: null, applied_count: null, committed: false,
+    attempts: [{ ...smartPlaceRun.attempts[0]!, stage: 'dry-run' as const, inserted_count: 5 }],
+  }
+  render(<RunDetailSheet open onOpenChange={vi.fn()} run={run} isLoading={false} />)
+  const field = (name: string) => screen.getByText(name, { selector: 'dt' }).parentElement?.querySelector('dd')?.textContent
+  expect(field('수집기')).toBe('네이버 영업시간')
+  expect(field('품질 상태')).toBe('주의')
+  expect(field('원시 실행 결과')).toBe('SUCCESS')
+  expect(field('실행 유형')).toContain('사전 점검')
+  expect(field('상위 실행 ID')).toBe(run.parent_run_id)
+  expect(field('검토 매장')).toBe('2')
+  expect(field('실패 매장')).toBe('0')
+  expect(field('확인 매장')).toBe('-')
+  expect(field('적용 매장')).toBe('-')
+  expect(field('신규 확정 매장')).toBe('-')
+  expect(field('DB 반영')).toBe('미반영')
+  expect(screen.getByText(/요일 행 수가 아닌 매장 수/)).toBeTruthy()
+  expect(screen.getByText('dry-run (예상)')).toBeTruthy()
+})
+
+it('부분 실패의 반영 확인과 예약 관측 구간을 완료나 정확한 단계 소요시간으로 표시하지 않는다', () => {
+  const run = { ...partialFailedRun, collector_id: 'naver-store-hours', committed: true, applied_count: 2,
+    attempts: [{ ...partialFailedRun.attempts[0]!, timing_basis: 'parent-window' as const },
+      { ...partialFailedRun.attempts[1]!, timing_basis: 'worker-report' as const },
+      partialFailedRun.attempts[2]!],
+  }
+  render(<RunDetailSheet open onOpenChange={vi.fn()} run={run} isLoading={false} />)
+  expect(screen.getAllByText('반영 확인')).toHaveLength(2)
+  expect(screen.queryByText('반영 완료')).toBeNull()
+  expect(screen.getByText('예약 실행 관측 구간')).toBeTruthy()
+  expect(screen.getByText('자식 실행 보고 시각')).toBeTruthy()
+  expect(screen.getByText(/정확한 단계 소요시간이 아닙니다/)).toBeTruthy()
+  const running = screen.getByText('진행 작업').closest('tr')!
+  const timingColumn = screen.getAllByRole('columnheader').findIndex((header) => header.textContent === '시각 근거')
+  expect(running.querySelectorAll('td')[timingColumn]?.textContent).toBe('-')
+})

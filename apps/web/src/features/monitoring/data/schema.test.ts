@@ -272,3 +272,37 @@ describe('FastAPI 응답 계약', () => {
     ).toBe(false)
   })
 })
+
+it('네이버 실행의 확장 메타데이터를 보존하고 잘못된 집계를 거부한다', () => {
+  const extension = { parent_run_id: validRun.run_id, raw_status: 'SUCCESS', execution_kind: 'preflight-only', review_count: 2, failure_count: 0, applied_count: null, coverage_count: null, committed: false, successful_check_at: null, error_category: null }
+  expect(collectorRunSchema.parse({ ...validRun, ...extension })).toMatchObject(extension)
+  expect(collectorRunSchema.safeParse({ ...validRun, review_count: -1 }).success).toBe(false)
+  expect(collectorRunSchema.safeParse({ ...validRun, successful_check_at: '2026-09-08T10:00:00+09:00' }).success).toBe(false)
+  const attempt = { ...validRun.attempts[0], child_run_id: validRun.run_id, stage: 'dry-run', store_codes: ['001'] }
+  expect(collectorRunSchema.parse({ ...validRun, attempts: [attempt] }).attempts[0]).toMatchObject(attempt)
+})
+
+it('하위 시각의 증거 종류를 보존하고 계약 외 값을 거부한다', () => {
+  const attempt = { ...validRun.attempts[0], timing_basis: 'parent-window' }
+  expect(collectorRunSchema.parse({ ...validRun, attempts: [attempt] }).attempts[0]).toMatchObject({ timing_basis: 'parent-window' })
+  expect(collectorRunSchema.safeParse({ ...validRun, attempts: [{ ...attempt, timing_basis: 'estimated' }] }).success).toBe(false)
+})
+
+it.each(['fcdaum', 'hmr', 'smartplace'])('기존 %s API의 null 시도 메타데이터를 현황과 이력에서 허용한다', (collectorId) => {
+  const run = {
+    ...validRun,
+    collector_id: collectorId,
+    attempts: validRun.attempts.map((attempt) => ({
+      ...attempt, store_codes: null, child_run_id: null, stage: null, timing_basis: null,
+    })),
+  }
+  const history = runsResponseSchema.safeParse({ items: [run], errors: [], source_status: sourceStatus, total: 1 })
+  expect(history.success).toBe(true)
+  const collectors = collectorsResponseSchema.parse({
+    items: [{ collector_id: collectorId, display_name: collectorId, status: 'SUCCESS', latest_run: run,
+      schedule_timezone: null, daily_scheduled_time: null, max_duration_minutes: null,
+      last_successful_check_at: null, latest_data_at: null, freshness_overdue: false, freshness: [] }],
+    errors: [], source_status: sourceStatus,
+  })
+  expect(collectors.items[0].latest_run?.attempts[0].store_codes).toBeNull()
+})

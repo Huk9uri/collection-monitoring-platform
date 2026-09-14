@@ -45,3 +45,10 @@ describe('CollectorCard', () => {
     ).toContain('신규 / 변경 / 동일- / - / -')
   })
 })
+
+it('네이버 집계는 하위 작업 수가 아닌 반영 확인 및 실패 매장으로 표시한다', () => {
+  render(<CollectorCard summary={{ ...summaryWithUnknownCounts, collector_id: 'naver-store-hours', display_name: '네이버 영업시간' }} />)
+  expect(screen.getByText('반영 확인 매장')).toBeTruthy()
+  expect(screen.getByText('실패 매장')).toBeTruthy()
+  expect(screen.queryByText('성공 작업')).toBeNull()
+})

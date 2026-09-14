@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from monitoring_api.adapters.base import CollectorRun, FreshnessRecord
 from monitoring_api.auth import CurrentUser, get_current_user
 from monitoring_api.main import create_app
+from monitoring_api.config import Settings
 from monitoring_api.models import MonitoringStatus
 from monitoring_api.services.monitoring import MonitoringService
 
@@ -159,7 +160,8 @@ def available_adapter() -> AvailableAdapter:
 @pytest.fixture(scope="module")
 def client(available_adapter: AvailableAdapter) -> Iterator[TestClient]:
     service = MonitoringService([available_adapter])
-    with TestClient(create_app(monitoring_service=service)) as test_client:
+    with TestClient(create_app(Settings(_env_file=None), monitoring_service=service)) as test_client:
+        test_client.app.dependency_overrides[get_current_user] = lambda: CurrentUser(roles={'viewer'})
         yield test_client
 
 
@@ -470,7 +472,7 @@ def test_every_monitoring_route_requires_viewer_role(client: TestClient) -> None
     try:
         responses = [client.get(path) for path in paths]
     finally:
-        client.app.dependency_overrides.pop(get_current_user)
+        client.app.dependency_overrides[get_current_user] = lambda: CurrentUser(roles={'viewer'})
 
     assert all(response.status_code == 403 for response in responses)
     assert all(

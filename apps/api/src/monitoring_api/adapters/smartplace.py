@@ -54,7 +54,9 @@ class SmartPlacePolicy:
     def __post_init__(self) -> None:
         ZoneInfo(self.schedule_timezone)
         if self.daily_scheduled_time.tzinfo is not None:
-            raise ValueError("SmartPlace 예정 시각은 timezone 없는 현지 시각이어야 합니다.")
+            raise ValueError(
+                "SmartPlace 예정 시각은 timezone 없는 현지 시각이어야 합니다."
+            )
         if self.start_grace <= timedelta(0):
             raise ValueError("SmartPlace 시작 유예시간은 양수여야 합니다.")
         if self.max_duration <= timedelta(0):
@@ -62,7 +64,9 @@ class SmartPlacePolicy:
         if self.attribution_window <= timedelta(0):
             raise ValueError("SmartPlace 예약 귀속 창은 양수여야 합니다.")
         if self.attribution_window < self.start_grace:
-            raise ValueError("SmartPlace 예약 귀속 창은 시작 유예시간 이상이어야 합니다.")
+            raise ValueError(
+                "SmartPlace 예약 귀속 창은 시작 유예시간 이상이어야 합니다."
+            )
         if self.attribution_window >= timedelta(days=1):
             raise ValueError("SmartPlace 예약 귀속 창은 일일 주기보다 짧아야 합니다.")
         if not self.expected_scopes:
@@ -125,6 +129,7 @@ FROM normalized_runs
 WHERE (? IS NULL OR started_at >= ?)
   AND (? IS NULL OR started_at <= ?)
   AND (? IS NULL OR canonical_status = ?)
+  AND (? IS NULL OR scope_id = ?)
 ORDER BY started_at DESC, CONVERT(char(36), run_id) DESC
 OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"""
 
@@ -142,7 +147,7 @@ WHERE scheduled_at >= ? AND scheduled_at < ?
 ORDER BY scheduled_at DESC, started_at DESC, CONVERT(char(36), run_id) DESC"""
 
 SMARTPLACE_COUNT_SQL = f"""WITH normalized_runs AS (
-    SELECT runs.StartedAt AS started_at,
+    SELECT runs.StartedAt AS started_at, runs.BrandCode AS scope_id,
            {_DYNAMIC_STATUS_SQL} AS canonical_status
     FROM dbo.SMARTPLACE_COLLECTION_RUN AS runs
 )
@@ -150,7 +155,8 @@ SELECT COUNT_BIG(*) AS total
 FROM normalized_runs
 WHERE (? IS NULL OR started_at >= ?)
   AND (? IS NULL OR started_at <= ?)
-  AND (? IS NULL OR canonical_status = ?)"""
+  AND (? IS NULL OR canonical_status = ?)
+  AND (? IS NULL OR scope_id = ?)"""
 
 SMARTPLACE_STATUS_COUNTS_SQL = f"""WITH normalized_runs AS (
     SELECT runs.StartedAt AS started_at,
@@ -238,8 +244,22 @@ _STATUS_SEVERITY = {
 
 
 class SmartPlaceAdapter:
+    supports_scope_filter = True
     collector_id = "smartplace"
     display_name = "SmartPlace"
+
+    def with_monitoring_policy(self, policy):
+        from copy import copy
+        from types import SimpleNamespace
+        result = copy(self)
+        result._control_policy = policy
+        result._policy = SimpleNamespace(
+            schedule_timezone=policy.timezone_name,
+            max_duration=timedelta(minutes=policy.max_duration_minutes) if policy.max_duration_minutes else None,
+            attribution_window=timedelta(minutes=policy.schedule_attribution_window_minutes),
+            expected_scopes=self._policy.expected_scopes if self._policy else (),
+        )
+        return result
 
     def __init__(
         self,
@@ -258,21 +278,17 @@ class SmartPlaceAdapter:
         return now
 
     def _stale_cutoff(self) -> datetime | None:
-        if self._policy is None:
+        if self._policy is None or self._policy.max_duration is None:
             return None
         return self._now() - self._policy.max_duration
 
     def _attempts(self, run_id: str) -> list[CollectorAttempt]:
         return [
             attempt_from_row(row)
-            for row in self._repository.fetch_all(
-                SMARTPLACE_ATTEMPTS_SQL, (run_id,)
-            )
+            for row in self._repository.fetch_all(SMARTPLACE_ATTEMPTS_SQL, (run_id,))
         ]
 
-    def _runs_from_rows(
-        self, rows: list[dict[str, object]]
-    ) -> list[CollectorRun]:
+    def _runs_from_rows(self, rows: list[dict[str, object]]) -> list[CollectorRun]:
         attempts_by_run: dict[str, list[CollectorAttempt]] = defaultdict(list)
         if rows:
             run_ids = [str(row["run_id"]) for row in rows]
@@ -285,8 +301,7 @@ class SmartPlaceAdapter:
                     attempt_from_row(attempt_row)
                 )
         return [
-            self._run(row, attempts_by_run.get(str(row["run_id"]), []))
-            for row in rows
+            self._run(row, attempts_by_run.get(str(row["run_id"]), [])) for row in rows
         ]
 
     def _run(
@@ -318,6 +333,7 @@ class SmartPlaceAdapter:
         )
         if (
             self._policy is not None
+            and self._policy.max_duration is not None
             and run.status is MonitoringStatus.RUNNING
             and self._now() - run.started_at > self._policy.max_duration
         ):
@@ -325,6 +341,15 @@ class SmartPlaceAdapter:
         return run
 
     def _scheduled_occurrence(self) -> _ScheduledOccurrence | None:
+        if hasattr(self, '_control_policy'):
+            from monitoring_api.services.policy import previous_occurrence
+            policy = self._control_policy
+            scheduled_at = previous_occurrence(policy, self._now() - timedelta(minutes=policy.start_grace_minutes))
+            if scheduled_at is None:
+                return None
+            return _ScheduledOccurrence(scheduled_at=scheduled_at,
+                local_scheduled_at=scheduled_at.astimezone(ZoneInfo(policy.timezone_name)),
+                range_start=scheduled_at, range_end=scheduled_at + timedelta(minutes=policy.schedule_attribution_window_minutes))
         if self._policy is None:
             return None
         now = self._now()
@@ -419,9 +444,7 @@ class SmartPlaceAdapter:
                 to_sql_datetime(occurrence.range_end),
             ),
         )
-        expected_ids = {
-            scope.scope_id for scope in self._policy.expected_scopes
-        }
+        expected_ids = {scope.scope_id for scope in self._policy.expected_scopes}
         latest_by_scope: dict[str, CollectorRun] = {}
         for run in self._runs_from_rows(rows):
             if run.scope_id in expected_ids and run.scope_id not in latest_by_scope:
@@ -451,6 +474,7 @@ class SmartPlaceAdapter:
         started_from: datetime | None = None,
         started_to: datetime | None = None,
         status: MonitoringStatus | None = None,
+        scope_id: str | None = None,
         offset: int = 0,
         limit: int = 50,
     ) -> list[CollectorRun]:
@@ -467,6 +491,8 @@ class SmartPlaceAdapter:
                 to_sql_datetime(started_to),
                 None if status is None else status.value,
                 None if status is None else status.value,
+                scope_id,
+                scope_id,
                 0,
                 offset + limit + synthetic_capacity,
             ),
@@ -481,6 +507,8 @@ class SmartPlaceAdapter:
                 status=status,
             )
         )
+        if scope_id is not None:
+            runs = [run for run in runs if run.scope_id == scope_id]
         ordered = sorted(
             runs,
             # 고정 SQL의 동률 순서와 설정된 scope 순서를 그대로 보존한다.
@@ -495,6 +523,7 @@ class SmartPlaceAdapter:
         started_from: datetime | None = None,
         started_to: datetime | None = None,
         status: MonitoringStatus | None = None,
+        scope_id: str | None = None,
     ) -> int:
         rows = self._repository.fetch_all(
             SMARTPLACE_COUNT_SQL,
@@ -506,15 +535,21 @@ class SmartPlaceAdapter:
                 to_sql_datetime(started_to),
                 None if status is None else status.value,
                 None if status is None else status.value,
+                scope_id,
+                scope_id,
             ),
         )
         persisted = int(rows[0]["total"]) if rows else 0
         return persisted + len(
-            self._missing_runs(
-                started_from=started_from,
-                started_to=started_to,
-                status=status,
-            )
+            [
+                run
+                for run in self._missing_runs(
+                    started_from=started_from,
+                    started_to=started_to,
+                    status=status,
+                )
+                if scope_id is None or run.scope_id == scope_id
+            ]
         )
 
     def count_runs_by_status(
@@ -529,17 +564,16 @@ class SmartPlaceAdapter:
             ),
         )
         result = {
-            MonitoringStatus(str(row["status"])): int(row["total"])
-            for row in rows
+            MonitoringStatus(str(row["status"])): int(row["total"]) for row in rows
         }
         missing = self._missing_runs(
             started_from=started_from,
             started_to=started_to,
         )
         if missing:
-            result[MonitoringStatus.NOT_RUN] = (
-                result.get(MonitoringStatus.NOT_RUN, 0) + len(missing)
-            )
+            result[MonitoringStatus.NOT_RUN] = result.get(
+                MonitoringStatus.NOT_RUN, 0
+            ) + len(missing)
         return result
 
     def latest_successful_check_at(self) -> datetime | None:

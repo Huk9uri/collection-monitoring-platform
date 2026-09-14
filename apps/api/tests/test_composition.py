@@ -10,7 +10,7 @@ import monitoring_api.composition as composition
 import monitoring_api.db as db
 from monitoring_api.composition import build_monitoring_service
 from monitoring_api.config import Settings
-from monitoring_api.main import create_app
+from auth_helpers import create_admin_app as create_app
 
 
 FCDAUM_CONNECTION_STRING = (

@@ -365,7 +365,7 @@ describe('MonitoringPage', () => {
     expect(within(alert).getByRole('button', { name: '다시 시도' })).toBeTruthy()
   })
 
-  it('부분 데이터 소스 장애를 알리면서 정상 결과와 네 영역을 유지한다', async () => {
+  it('부분 데이터 소스 장애를 알리면서 정상 결과와 세 영역을 유지한다', async () => {
     mockApi({ errors: [sourceError] })
     renderPage()
 
@@ -374,7 +374,7 @@ describe('MonitoringPage', () => {
     expect(alert.textContent).toContain('데이터 소스를 조회할 수 없습니다.')
     expect(screen.getByRole('region', { name: '전체 현황' })).toBeTruthy()
     expect(screen.getByRole('region', { name: '수집기 현황' })).toBeTruthy()
-    expect(screen.getByRole('region', { name: '데이터 신선도' })).toBeTruthy()
+    expect(screen.queryByRole('region', { name: '데이터 신선도' })).toBeNull()
     expect(screen.getByRole('region', { name: '실행 이력' })).toBeTruthy()
     expect(screen.getByRole('main')).toBeTruthy()
   })
@@ -423,7 +423,7 @@ describe('MonitoringPage', () => {
     expect(alert.textContent).not.toContain('일부 데이터를')
   })
 
-  it('KPI와 수집기·신선도·실행 이력에 실제 조회 결과를 표시한다', async () => {
+  it('KPI와 수집기·실행 이력에 실제 조회 결과를 표시한다', async () => {
     mockApi({ summary: baseSummary })
     renderPage()
 
@@ -433,14 +433,11 @@ describe('MonitoringPage', () => {
     expect(kpis.textContent).toContain('오늘 장애1')
     expect(screen.getByRole('article', { name: 'HMR 최신 상태' })).toBeTruthy()
     expect(screen.getByRole('article', { name: 'FC다움 최신 상태' })).toBeTruthy()
-    expect(screen.getByRole('table', { name: '데이터 신선도' })).toBeTruthy()
-    expect(screen.getByText('마지막 성공 확인')).toBeTruthy()
-    expect(screen.getByText('최신 데이터 시각')).toBeTruthy()
-    expect(screen.getByText('SLA 초과')).toBeTruthy()
+    expect(screen.queryByRole('table', { name: '데이터 신선도' })).toBeNull()
     expect(screen.getByRole('table', { name: '수집 실행 이력' })).toBeTruthy()
   })
 
-  it('수집기 snapshot의 중첩 신선도를 표시하고 freshness endpoint는 호출하지 않는다', async () => {
+  it('신선도 데이터가 있어도 영역을 표시하거나 별도 조회하지 않는다', async () => {
     const snapshotFreshness: FreshnessRecord = {
       ...freshness[0]!,
       dataset_id: 'collector-snapshot',
@@ -455,7 +452,9 @@ describe('MonitoringPage', () => {
 
     renderPage()
 
-    expect(await screen.findByText('collector-snapshot')).toBeTruthy()
+    await screen.findByRole('region', { name: '수집기 현황' })
+    expect(screen.queryByText('collector-snapshot')).toBeNull()
+    expect(screen.queryByRole('region', { name: '데이터 신선도' })).toBeNull()
     expect(
       request.mock.calls.some(([path]) => String(path).endsWith('/freshness')),
     ).toBe(false)
@@ -728,5 +727,20 @@ describe('MonitoringPage', () => {
       `/api/v1/monitoring/runs/fcdaum/${partialFailedRun.run_id}`,
       undefined,
     )
+  })
+})
+
+it('브랜드 URL을 서버 조건으로 복원하고 변경 시 첫 페이지부터 조회한다', async () => {
+  window.history.replaceState(null, '', '/?brand=hanchon&page=2')
+  const request = mockApi({ total: 45 })
+  renderPage()
+  await screen.findByRole('table', { name: '수집 실행 이력' })
+  expect(screen.getByLabelText('브랜드 필터')).toHaveProperty('value', 'hanchon')
+  expect(request).toHaveBeenCalledWith('/api/v1/monitoring/runs', { params: expect.objectContaining({ scope_id: 'hanchon', offset: 20 }) })
+  fireEvent.change(screen.getByLabelText('브랜드 필터'), { target: { value: 'yuksoodang' } })
+  await waitFor(() => {
+    expect(new URLSearchParams(window.location.search).get('brand')).toBe('yuksoodang')
+    expect(new URLSearchParams(window.location.search).get('page')).toBeNull()
+    expect(request).toHaveBeenCalledWith('/api/v1/monitoring/runs', { params: expect.objectContaining({ scope_id: 'yuksoodang', offset: 0 }) })
   })
 })

@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from monitoring_api.config import Settings, get_settings
-from monitoring_api.main import create_app
+from auth_helpers import create_admin_app as create_app
 from monitoring_api.services.monitoring import MonitoringService
 
 from test_monitoring_api import AvailableAdapter, NotReadyAdapter, UnavailableAdapter
@@ -116,14 +116,14 @@ def test_cors_allows_only_the_configured_origin_get_and_authorization_header() -
         headers={
             "Origin": origin,
             "Access-Control-Request-Method": "GET",
-            "Access-Control-Request-Headers": "Authorization",
+            "Access-Control-Request-Headers": "X-CSRF-Token",
         },
     )
 
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == origin
-    assert response.headers["access-control-allow-methods"] == "GET"
-    assert "Authorization" in response.headers["access-control-allow-headers"]
+    assert response.headers["access-control-allow-methods"] == "GET, POST, PUT"
+    assert "X-CSRF-Token" in response.headers["access-control-allow-headers"]
     assert "X-API-Key" not in response.headers["access-control-allow-headers"]
 
 
@@ -226,5 +226,5 @@ def test_cors_rejects_unconfigured_origin_and_non_get_method() -> None:
 
     assert unconfigured_origin_response.status_code == 400
     assert "access-control-allow-origin" not in unconfigured_origin_response.headers
-    assert post_response.status_code == 400
+    assert post_response.status_code == 200
     assert unsupported_header_response.status_code == 400

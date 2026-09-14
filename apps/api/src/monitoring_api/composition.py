@@ -12,6 +12,10 @@ from monitoring_api.adapters.smartplace import (
     SmartPlaceAdapter,
     SmartPlacePolicy,
 )
+from monitoring_api.adapters.naver_store_hours import (
+    NaverStoreHoursAdapter,
+    StoreHoursPolicy,
+)
 from monitoring_api.config import Settings
 from monitoring_api.db import ReadOnlyRepository
 from monitoring_api.services.monitoring import CollectorPolicy, MonitoringService
@@ -87,16 +91,12 @@ def build_monitoring_service(settings: Settings) -> MonitoringService:
             smartplace_policy = SmartPlacePolicy(
                 schedule_timezone=settings.smartplace_schedule_timezone,
                 daily_scheduled_time=settings.smartplace_daily_scheduled_time,
-                start_grace=timedelta(
-                    minutes=settings.smartplace_start_grace_minutes
-                ),
+                start_grace=timedelta(minutes=settings.smartplace_start_grace_minutes),
                 max_duration=timedelta(
                     minutes=settings.smartplace_max_duration_minutes
                 ),
                 attribution_window=timedelta(
-                    minutes=(
-                        settings.smartplace_schedule_attribution_window_minutes
-                    )
+                    minutes=(settings.smartplace_schedule_attribution_window_minutes)
                 ),
                 expected_scopes=tuple(
                     ExpectedScope(scope_id=scope_id, scope_name=scope_name)
@@ -111,6 +111,33 @@ def build_monitoring_service(settings: Settings) -> MonitoringService:
                     query_timeout_seconds=settings.db_query_timeout_seconds,
                 ),
                 policy=smartplace_policy,
+            )
+        )
+    if connection_string := _reveal(settings.naver_store_hours_connection_string):
+        policy = None
+        if settings.naver_store_hours_schedule_timezone is not None:
+            policy = StoreHoursPolicy(
+                schedule_timezone=settings.naver_store_hours_schedule_timezone,
+                weekly_scheduled_day=settings.naver_store_hours_weekly_scheduled_day,
+                weekly_scheduled_time=settings.naver_store_hours_weekly_scheduled_time,
+                start_grace=timedelta(
+                    minutes=settings.naver_store_hours_start_grace_minutes
+                ),
+                max_duration=timedelta(
+                    minutes=settings.naver_store_hours_max_duration_minutes
+                ),
+                attribution_window=timedelta(
+                    minutes=settings.naver_store_hours_schedule_attribution_window_minutes
+                ),
+            )
+        adapters.append(
+            NaverStoreHoursAdapter(
+                ReadOnlyRepository(
+                    connection_string,
+                    connect_timeout_seconds=settings.db_connect_timeout_seconds,
+                    query_timeout_seconds=settings.db_query_timeout_seconds,
+                ),
+                policy=policy,
             )
         )
     return MonitoringService(

@@ -25,6 +25,7 @@ export const MAX_RUNS_PAGE = Math.floor(10_000 / RUNS_PAGE_SIZE) + 1
 export interface RunFilters {
   from: string
   to: string
+  brand?: string
   collector: string
   status: MonitoringStatus | ''
 }
@@ -84,7 +85,7 @@ export function RunsTable({
               서버에서 기간과 수집기별 실행을 페이지 단위로 조회합니다.
             </p>
           </div>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" role="group" aria-label="실행 이력 필터">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5" role="group" aria-label="실행 이력 필터">
             <label className="grid gap-1 text-xs font-medium text-muted-foreground">
               조회 시작일
               <input
@@ -132,6 +133,15 @@ export function RunsTable({
                     {collectorDisplayName(collector)}
                   </option>
                 ))}
+              </select>
+            </label>
+            <label className="grid gap-1 text-xs font-medium text-muted-foreground">
+              브랜드 필터
+              <select className={fieldClassName} value={filters.brand ?? ''}
+                onChange={(event) => updateFilter('brand', event.target.value)}>
+                <option value="">전체 브랜드</option>
+                <option value="hanchon">한촌설렁탕</option>
+                <option value="yuksoodang">육수당</option>
               </select>
             </label>
             <label className="grid gap-1 text-xs font-medium text-muted-foreground">

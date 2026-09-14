@@ -7,7 +7,6 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { AppLayout } from '../../components/layout/app-layout'
 import { CollectorCard } from './components/collector-card'
-import { FreshnessSummary } from './components/freshness-summary'
 import { KpiCards } from './components/kpi-cards'
 import {
   MonitoringEmpty,
@@ -98,6 +97,7 @@ function readUrlState(): MonitoringUrlState {
     from: from.value,
     to: to.value,
     collector: params.get('collector') ?? '',
+    brand: ['hanchon', 'yuksoodang'].includes(params.get('brand') ?? '') ? params.get('brand')! : '',
     status: parsedStatus.success ? parsedStatus.data : '',
   }
   const initialErrors: RunFilterErrors = {}
@@ -122,6 +122,7 @@ function writeUrlState(state: MonitoringUrlState, replace = false) {
   if (filters.to) params.set('to', filters.to)
   if (filters.collector) params.set('collector', filters.collector)
   if (filters.status) params.set('status', filters.status)
+  if (filters.brand) params.set('brand', filters.brand)
   if (page > 1) params.set('page', String(page))
 
   const search = params.toString()
@@ -178,6 +179,7 @@ export function MonitoringPage() {
   const runConditions = useMemo(
     () => ({
       collectorId: urlState.filters.collector || undefined,
+      scopeId: urlState.filters.brand || undefined,
       startedFrom: seoulDayBoundary(urlState.filters.from, false),
       startedTo: seoulDayBoundary(urlState.filters.to, true),
       status: urlState.filters.status || undefined,
@@ -292,8 +294,6 @@ export function MonitoringPage() {
       ].map((run) => run.collector_id),
     ),
   )
-  const freshnessItems =
-    collectorsQuery.data?.items.flatMap((summary) => summary.freshness) ?? []
 
   return (
     <AppLayout header={<PageHeader onRefresh={refresh} isRefreshing={isFetching} />}>
@@ -325,8 +325,6 @@ export function MonitoringPage() {
               ))}
             </div>
           </section>
-
-          <FreshnessSummary items={freshnessItems} />
 
           <RunsTable
             runs={runsQuery.data?.items ?? []}
