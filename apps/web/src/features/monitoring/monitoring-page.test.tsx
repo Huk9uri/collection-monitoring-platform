@@ -741,24 +741,65 @@ describe('MonitoringPage', () => {
     ).toEqual(['collectors', 'runs', 'summary'])
   })
 
-  it('실행을 선택하면 상세를 조회해 서울 시각과 하위 작업을 표시한다', async () => {
+  it('RUN ID를 선택하면 해당 행 아래에 상세를 펼치고 다시 선택하면 접는다', async () => {
     const request = mockApi()
     renderPage()
-    await screen.findByRole('table', { name: '수집 실행 이력' })
+    const runsTable = await screen.findByRole('table', { name: '수집 실행 이력' })
+    const trigger = screen.getByRole('button', {
+      name: `실행 ${partialFailedRun.run_id} 상세 보기`,
+    })
 
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: `실행 ${partialFailedRun.run_id} 상세 보기`,
-      }),
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(trigger)
+
+    const detail = await within(runsTable).findByRole('region', {
+      name: '실행 상세',
+    })
+    expect(trigger.getAttribute('aria-expanded')).toBe('true')
+    expect(detail.closest('tr')?.previousElementSibling?.textContent).toContain(
+      partialFailedRun.run_id,
     )
-
-    const dialog = await screen.findByRole('dialog', { name: '실행 상세' })
-    expect(await within(dialog).findByText('한촌설렁탕')).toBeTruthy()
-    expect(within(dialog).getByText('2026. 9. 8. 10:00')).toBeTruthy()
+    expect(await within(detail).findByText('한촌설렁탕')).toBeTruthy()
+    expect(within(detail).getByText('2026. 9. 8. 10:00')).toBeTruthy()
+    expect(screen.queryByRole('dialog')).toBeNull()
     expect(request).toHaveBeenCalledWith(
       `/api/v1/monitoring/runs/fcdaum/${partialFailedRun.run_id}`,
       undefined,
     )
+
+    fireEvent.click(trigger)
+
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+    expect(within(runsTable).queryByRole('region', { name: '실행 상세' })).toBeNull()
+  })
+
+  it('다른 RUN ID를 선택하면 기존 상세를 닫고 선택한 행 아래만 펼친다', async () => {
+    mockApi()
+    renderPage()
+    const runsTable = await screen.findByRole('table', { name: '수집 실행 이력' })
+    const firstTrigger = screen.getByRole('button', {
+      name: `실행 ${successfulRun.run_id} 상세 보기`,
+    })
+    const secondTrigger = screen.getByRole('button', {
+      name: `실행 ${partialFailedRun.run_id} 상세 보기`,
+    })
+
+    fireEvent.click(firstTrigger)
+    await within(runsTable).findByRole('region', { name: '실행 상세' })
+    fireEvent.click(secondTrigger)
+
+    await waitFor(() => {
+      expect(firstTrigger.getAttribute('aria-expanded')).toBe('false')
+      expect(secondTrigger.getAttribute('aria-expanded')).toBe('true')
+      expect(
+        within(runsTable).getAllByRole('region', { name: '실행 상세' }),
+      ).toHaveLength(1)
+    })
+    expect(
+      within(runsTable)
+        .getByRole('region', { name: '실행 상세' })
+        .closest('tr')?.previousElementSibling?.textContent,
+    ).toContain(partialFailedRun.run_id)
   })
 })
 

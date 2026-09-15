@@ -1,8 +1,8 @@
 import { cleanup, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 
 import type { CollectorRun } from '../data/schema'
-import { RunDetailSheet } from './run-detail-sheet'
+import { RunDetailDropdown } from './run-detail-dropdown'
 
 afterEach(cleanup)
 
@@ -143,18 +143,17 @@ const smartPlaceRun: CollectorRun = {
   ],
 }
 
-describe('RunDetailSheet', () => {
+describe('RunDetailDropdown', () => {
   it('부분 실패를 장애로 표시하고 성공·실패 하위 작업을 구분한다', () => {
     render(
-      <RunDetailSheet
-        open
-        onOpenChange={vi.fn()}
+      <RunDetailDropdown
         run={partialFailedRun}
         isLoading={false}
       />,
     )
 
-    expect(screen.getByRole('dialog', { name: '실행 상세' })).toBeTruthy()
+    expect(screen.getByRole('region', { name: '실행 상세' })).toBeTruthy()
+    expect(screen.queryByRole('dialog')).toBeNull()
     expect(screen.getByText('부분 실패').dataset.severity).toBe('incident')
     expect(screen.getByText('한촌설렁탕').closest('tr')?.textContent).toContain(
       '성공',
@@ -167,9 +166,7 @@ describe('RunDetailSheet', () => {
 
   it('HMR 원시 SUCCESS_WITH_DATA를 canonical outcome 기준 성공으로 표시한다', () => {
     render(
-      <RunDetailSheet
-        open
-        onOpenChange={vi.fn()}
+      <RunDetailDropdown
         run={partialFailedRun}
         isLoading={false}
       />,
@@ -182,9 +179,7 @@ describe('RunDetailSheet', () => {
 
   it('진행·미실행·주의 canonical outcome을 성공과 구분한다', () => {
     render(
-      <RunDetailSheet
-        open
-        onOpenChange={vi.fn()}
+      <RunDetailDropdown
         run={partialFailedRun}
         isLoading={false}
       />,
@@ -203,9 +198,7 @@ describe('RunDetailSheet', () => {
 
   it('SmartPlace 브랜드의 login과 pos_linked 하위 작업 및 미확인 집계를 표시한다', () => {
     render(
-      <RunDetailSheet
-        open
-        onOpenChange={vi.fn()}
+      <RunDetailDropdown
         run={smartPlaceRun}
         isLoading={false}
       />,
@@ -225,7 +218,7 @@ it('네이버 사전 점검의 품질과 원시 결과 및 미확정 적용 집�
     review_count: 2, failure_count: 0, coverage_count: null, applied_count: null, committed: false,
     attempts: [{ ...smartPlaceRun.attempts[0]!, stage: 'dry-run' as const, inserted_count: 5 }],
   }
-  render(<RunDetailSheet open onOpenChange={vi.fn()} run={run} isLoading={false} />)
+  render(<RunDetailDropdown run={run} isLoading={false} />)
   const field = (name: string) => screen.getByText(name, { selector: 'dt' }).parentElement?.querySelector('dd')?.textContent
   expect(field('수집기')).toBe('네이버 영업시간')
   expect(field('품질 상태')).toBe('주의')
@@ -248,7 +241,7 @@ it('부분 실패의 반영 확인과 예약 관측 구간을 완료나 정확�
       { ...partialFailedRun.attempts[1]!, timing_basis: 'worker-report' as const },
       partialFailedRun.attempts[2]!],
   }
-  render(<RunDetailSheet open onOpenChange={vi.fn()} run={run} isLoading={false} />)
+  render(<RunDetailDropdown run={run} isLoading={false} />)
   expect(screen.getAllByText('반영 확인')).toHaveLength(2)
   expect(screen.queryByText('반영 완료')).toBeNull()
   expect(screen.getByText('예약 실행 관측 구간')).toBeTruthy()

@@ -15,7 +15,6 @@ import {
   MonitoringPartialAlert,
 } from './components/monitoring-state'
 import { PageHeader } from './components/page-header'
-import { RunDetailSheet } from './components/run-detail-sheet'
 import {
   MAX_RUNS_PAGE,
   RUNS_PAGE_SIZE,
@@ -283,7 +282,11 @@ export function MonitoringPage() {
   }
 
   function selectRun(run: CollectorRun) {
-    setSelectedRun({ collectorId: run.collector_id, runId: run.run_id })
+    setSelectedRun((current) =>
+      current?.collectorId === run.collector_id && current.runId === run.run_id
+        ? null
+        : { collectorId: run.collector_id, runId: run.run_id },
+    )
   }
 
   const collectorIds = Array.from(
@@ -336,22 +339,18 @@ export function MonitoringPage() {
             onFiltersChange={changeFilters}
             onPageChange={changePage}
             onSelectRun={selectRun}
+            selectedCollectorId={selectedRun?.collectorId}
+            selectedRunId={selectedRun?.runId}
+            detailRun={detailQuery.data?.items[0]}
+            isDetailLoading={detailQuery.isPending && selectedRun !== null}
+            detailError={
+              detailQuery.error ??
+              (detailQuery.data?.errors.length ? detailQuery.data.errors : undefined)
+            }
           />
         </div>
       )}
 
-      <RunDetailSheet
-        open={selectedRun !== null}
-        onOpenChange={(open) => {
-          if (!open) setSelectedRun(null)
-        }}
-        run={detailQuery.data?.items[0]}
-        isLoading={detailQuery.isPending && selectedRun !== null}
-        error={
-          detailQuery.error ??
-          (detailQuery.data?.errors.length ? detailQuery.data.errors : undefined)
-        }
-      />
     </AppLayout>
   )
 }

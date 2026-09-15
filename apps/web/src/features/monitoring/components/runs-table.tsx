@@ -1,4 +1,5 @@
-import { ChevronLeftIcon, ChevronRightIcon } from 'lucide-react'
+import { Fragment } from 'react'
+import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon } from 'lucide-react'
 
 import { Button } from '../../../components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '../../../components/ui/card'
@@ -13,6 +14,7 @@ import {
 import type { CollectorRun, MonitoringStatus } from '../data/schema'
 import { formatCount } from '../data/format-count'
 import { collectorDisplayName } from './collector-card'
+import { RunDetailDropdown } from './run-detail-dropdown'
 import {
   formatSeoulDateTime,
   StatusBadge,
@@ -45,6 +47,11 @@ interface RunsTableProps {
   onFiltersChange: (filters: RunFilters) => void
   onPageChange: (page: number) => void
   onSelectRun: (run: CollectorRun) => void
+  selectedCollectorId?: string
+  selectedRunId?: string
+  detailRun?: CollectorRun
+  isDetailLoading?: boolean
+  detailError?: unknown
 }
 
 const statuses = Object.entries(statusPresentation) as [
@@ -65,6 +72,11 @@ export function RunsTable({
   onFiltersChange,
   onPageChange,
   onSelectRun,
+  selectedCollectorId,
+  selectedRunId,
+  detailRun,
+  isDetailLoading = false,
+  detailError,
 }: RunsTableProps) {
   const totalPages = Math.min(
     MAX_RUNS_PAGE,
@@ -186,16 +198,29 @@ export function RunsTable({
                   </TableCell>
                 </TableRow>
               ) : (
-                runs.map((run) => (
-                  <TableRow key={`${run.collector_id}:${run.run_id}`}>
+                runs.map((run) => {
+                  const isExpanded =
+                    selectedCollectorId === run.collector_id &&
+                    selectedRunId === run.run_id
+                  const detailId = `run-detail-${run.collector_id}-${run.run_id}`
+
+                  return (
+                    <Fragment key={`${run.collector_id}:${run.run_id}`}>
+                      <TableRow data-state={isExpanded ? 'selected' : undefined}>
                     <TableCell>
                       <button
                         type="button"
                         className="font-medium text-primary underline-offset-4 hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         aria-label={`실행 ${run.run_id} 상세 보기`}
+                        aria-expanded={isExpanded}
+                        aria-controls={detailId}
                         onClick={() => onSelectRun(run)}
                       >
                         {run.run_id}
+                        <ChevronDownIcon
+                          aria-hidden="true"
+                          className={`ml-1 inline size-4 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                        />
                       </button>
                     </TableCell>
                     <TableCell>{collectorDisplayName(run.collector_id)}</TableCell>
@@ -208,8 +233,22 @@ export function RunsTable({
                     <TableCell>{formatCount(run.inserted_count)}</TableCell>
                     <TableCell>{formatCount(run.changed_count)}</TableCell>
                     <TableCell>{run.failed_units.toLocaleString('ko-KR')}</TableCell>
-                  </TableRow>
-                ))
+                      </TableRow>
+                      {isExpanded ? (
+                        <TableRow className="bg-muted/20 hover:bg-muted/20">
+                          <TableCell colSpan={9} className="whitespace-normal p-3 sm:p-4">
+                            <RunDetailDropdown
+                              id={detailId}
+                              run={detailRun}
+                              isLoading={isDetailLoading}
+                              error={detailError}
+                            />
+                          </TableCell>
+                        </TableRow>
+                      ) : null}
+                    </Fragment>
+                  )
+                })
               )}
             </TableBody>
           </Table>

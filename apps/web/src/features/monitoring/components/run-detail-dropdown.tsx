@@ -1,13 +1,6 @@
 import { collectorDisplayName } from './collector-card'
 import { Badge } from '../../../components/ui/badge'
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from '../../../components/ui/sheet'
-import {
   Table,
   TableBody,
   TableCell,
@@ -19,9 +12,8 @@ import type { CollectorAttempt, CollectorRun } from '../data/schema'
 import { formatCount } from '../data/format-count'
 import { formatSeoulDateTime, StatusBadge } from './monitoring-state'
 
-interface RunDetailSheetProps {
-  open: boolean
-  onOpenChange: (open: boolean) => void
+interface RunDetailDropdownProps {
+  id?: string
   run?: CollectorRun
   isLoading: boolean
   error?: unknown
@@ -48,22 +40,24 @@ function attemptOutcome(attempt: CollectorAttempt) {
   return { label: '상태 확인 필요', variant: 'warning' as const }
 }
 
-export function RunDetailSheet({
-  open,
-  onOpenChange,
+export function RunDetailDropdown({
+  id = 'run-detail',
   run,
   isLoading,
   error,
-}: RunDetailSheetProps) {
+}: RunDetailDropdownProps) {
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-full overflow-y-auto sm:max-w-2xl">
-        <SheetHeader className="border-b pr-12">
-          <SheetTitle>실행 상세</SheetTitle>
-          <SheetDescription>
+    <section
+      id={id}
+      aria-labelledby={`${id}-title`}
+      className="space-y-4 rounded-lg border bg-background p-4 shadow-sm"
+    >
+        <header className="border-b pb-4">
+          <h2 id={`${id}-title`} className="font-semibold">실행 상세</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
             수집 작업의 시도와 데이터 적재 결과입니다.
-          </SheetDescription>
-        </SheetHeader>
+          </p>
+        </header>
 
         {isLoading ? (
           <p className="px-4 text-sm text-muted-foreground" role="status">
@@ -176,7 +170,6 @@ export function RunDetailSheet({
             </section>
           </div>
         )}
-      </SheetContent>
-    </Sheet>
+    </section>
   )
 }
