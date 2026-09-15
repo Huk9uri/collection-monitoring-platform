@@ -21,6 +21,12 @@ def module():
     return importlib.import_module("monitoring_api.adapters.naver_store_hours")
 
 
+@pytest.mark.parametrize('reason', ['INVALID_PLACE', 'HOURS_NOT_PROVIDED'])
+def test_exclusion_reason_accepts_success_status(reason):
+    module()._validate_counts(dict(raw_status='SUCCESS', error_category=reason,
+                                   source_count=1, committed=False))
+
+
 def row(**updates):
     payload = dict(
         collector_id="naver-store-hours",
