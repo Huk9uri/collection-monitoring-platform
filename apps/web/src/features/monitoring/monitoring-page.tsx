@@ -307,7 +307,7 @@ export function MonitoringPage() {
         <div className="space-y-6">
           <MonitoringPartialAlert errors={sourceErrors} failedAreas={failedAreas} />
 
-          <KpiCards summary={summaryQuery.data} />
+          <KpiCards collectors={collectorsQuery.data?.items} />
 
           <section aria-label="수집기 현황" className="space-y-3">
             <div>

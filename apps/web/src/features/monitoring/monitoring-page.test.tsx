@@ -372,7 +372,7 @@ describe('MonitoringPage', () => {
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain('FC다움')
     expect(alert.textContent).toContain('데이터 소스를 조회할 수 없습니다.')
-    expect(screen.getByRole('region', { name: '전체 현황' })).toBeTruthy()
+    expect(screen.getByRole('region', { name: '수집기 상태 요약' })).toBeTruthy()
     expect(screen.getByRole('region', { name: '수집기 현황' })).toBeTruthy()
     expect(screen.queryByRole('region', { name: '데이터 신선도' })).toBeNull()
     expect(screen.getByRole('region', { name: '실행 이력' })).toBeTruthy()
@@ -424,13 +424,45 @@ describe('MonitoringPage', () => {
   })
 
   it('KPI와 수집기·실행 이력에 실제 조회 결과를 표시한다', async () => {
-    mockApi({ summary: baseSummary })
+    const collectors = [
+      toCollectorSummary(successfulRun),
+      toCollectorSummary({
+        ...successfulRun,
+        collector_id: 'fcdaum',
+        run_id: '00000000-0000-4000-8000-000000000004',
+      }),
+      {
+        ...toCollectorSummary({
+          ...failedRun,
+          collector_id: 'smartplace',
+        }),
+        display_name: 'SmartPlace',
+      },
+      {
+        ...toCollectorSummary({
+          ...failedRun,
+          collector_id: 'naver-store-hours',
+          run_id: '00000000-0000-4000-8000-000000000005',
+        }),
+        display_name: '네이버 매장 영업시간',
+      },
+    ]
+    mockApi({
+      collectors,
+      summary: {
+        ...baseSummary,
+        registered_collectors: 4,
+        today_success_runs: 0,
+        today_incident_runs: 8,
+      },
+    })
     renderPage()
 
-    const kpis = await screen.findByRole('region', { name: '전체 현황' })
-    expect(kpis.textContent).toContain('전체 수집기2')
-    expect(kpis.textContent).toContain('오늘 정상3')
-    expect(kpis.textContent).toContain('오늘 장애1')
+    const kpis = await screen.findByRole('region', { name: '수집기 상태 요약' })
+    expect(kpis.textContent).toContain('전체 수집기4')
+    expect(kpis.textContent).toContain('정상2')
+    expect(kpis.textContent).toContain('장애2')
+    expect(kpis.textContent).toContain('실행 중0')
     expect(screen.getByRole('article', { name: 'HMR 최신 상태' })).toBeTruthy()
     expect(screen.getByRole('article', { name: 'FC다움 최신 상태' })).toBeTruthy()
     expect(screen.queryByRole('table', { name: '데이터 신선도' })).toBeNull()
