@@ -101,6 +101,21 @@ def _validate_counts(data):
         raise ValueError("원본 상태가 유효하지 않습니다.")
 
 
+def _matches_persisted_time(payload_time: datetime | None, sql_time: datetime | None) -> bool:
+    """원본 시각 또는 저장 경로에서 밀리초로 절삭된 시각만 허용한다.
+
+    SQL datetime2(6)에도 기록 경로에 따라 밀리초까지만 남을 수 있다.
+    임의 오차 범위를 허용하지 않고 절삭 결과가 정확히 같은지 비교한다.
+    API에는 JSON 원본의 마이크로초 정밀도를 보존한다.
+    """
+    persisted = as_utc(sql_time)
+    if payload_time is None or persisted is None:
+        return payload_time is persisted
+    return persisted == payload_time or persisted == payload_time.replace(
+        microsecond=(payload_time.microsecond // 1000) * 1000
+    )
+
+
 def parse_run(row) -> CollectorRun:
     """알 수 없는 키와 자유 형식 문자열을 거부하고 SQL 식별자를 대조한다."""
     data = json.loads(row["payload"])
@@ -188,8 +203,8 @@ def parse_run(row) -> CollectorRun:
     if (
         run.execution_kind != row["execution_kind"]
         or run.status.value != row["status"]
-        or run.started_at != as_utc(row["started_at"])
-        or run.completed_at != as_utc(row["completed_at"])
+        or not _matches_persisted_time(run.started_at, row["started_at"])
+        or not _matches_persisted_time(run.completed_at, row["completed_at"])
     ):
         raise ValueError("실행 상태 또는 시각이 일치하지 않습니다.")
     if run.completed_at is not None and run.completed_at < run.started_at:
