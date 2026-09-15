@@ -16,6 +16,21 @@ from monitoring_api.security import token_hash, SESSION_IDLE_HOURS
 
 from monitoring_api.models import Role
 
+LOCAL_HOSTS = frozenset({'localhost', '127.0.0.1', '::1'})
+
+
+def is_local_http(request: Request) -> bool:
+    """운영 환경을 제외한 명시적 루프백 HTTP 주소만 허용한다."""
+    return (
+        not request.app.state.settings.production
+        and request.url.scheme == 'http'
+        and request.url.hostname in LOCAL_HOSTS
+    )
+
+
+def session_cookie_name(request: Request) -> str:
+    return 'monitoring-dev-session' if is_local_http(request) else '__Host-monitoring-session'
+
 
 class CurrentUser(BaseModel):
     """인증 공급자와 무관하게 사용하는 현재 사용자 표현이다."""
@@ -39,7 +54,11 @@ def get_session_repository(request: Request) -> SessionRepository:
 
 
 def get_current_user(request: Request) -> CurrentUser:
-    token = request.cookies.get('__Host-monitoring-session')
+    if not request.cookies:
+        raise HTTPException(401, '로그인이 필요합니다.')
+    if request.url.scheme != 'https' and not is_local_http(request):
+        raise HTTPException(401, '로그인이 필요합니다.')
+    token = request.cookies.get(session_cookie_name(request))
     if not token or len(token) > 128:
         raise HTTPException(401, '로그인이 필요합니다.')
     record = get_session_repository(request).authenticate(
@@ -59,7 +78,8 @@ def check_origin(request: Request) -> None:
         origin = f'{referer.scheme}://{referer.netloc}'
     if origin not in request.app.state.settings.cors_origins:
         raise HTTPException(403, '허용되지 않은 요청 출처입니다.')
-    if request.url.scheme != 'https':
+    local_origin = urlsplit(origin).hostname in LOCAL_HOSTS
+    if request.url.scheme != 'https' and not (is_local_http(request) and local_origin):
         raise HTTPException(403, '로그인 요청은 HTTPS가 필요합니다.')
 
 
