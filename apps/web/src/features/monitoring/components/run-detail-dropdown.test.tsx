@@ -1,10 +1,40 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import type { CollectorRun } from '../data/schema'
 import { RunDetailDropdown } from './run-detail-dropdown'
 
 afterEach(cleanup)
+
+it.each([10, null, undefined])('중단된 리뷰의 대상 %s·성공·실패 매장 수를 함께 표시한다', (target_store_count) => {
+  const run = { ...partialFailedRun, collector_id: 'naver-review-visitor',
+    status: 'ABORTED' as const, target_store_count, successful_units: 2, failed_units: 1 }
+  render(<RunDetailDropdown run={run} isLoading={false} />)
+  const detail = screen.getByRole('region', { name: '실행 상세' })
+  const field = (label: string) => within(detail).getByText(label, { selector: 'dt' }).parentElement?.querySelector('dd')?.textContent
+  expect(field('대상 매장')).toBe(target_store_count == null ? '-' : '10')
+  expect(field('성공 매장')).toBe('2')
+  expect(field('실패 매장')).toBe('1')
+  expect(within(detail).getByText('중단')).toBeTruthy()
+  expect(screen.queryByRole('dialog')).toBeNull()
+})
+
+it('같은 매장의 실패→성공 재시도를 시도 번호별로 모두 표시한다', () => {
+  const first = { ...partialFailedRun.attempts[0]!, unit_id: '777', unit_name: '한촌 / 서울점',
+    attempt_no: 1, outcome: 'FAILED' as const, raw_status: 'FAILED', error_category: 'PAGE_LOAD_FAILED' }
+  const second = { ...first, attempt_no: 2, outcome: 'SUCCESS' as const, raw_status: 'SUCCESS', error_category: null }
+  render(<RunDetailDropdown run={{ ...partialFailedRun, collector_id: 'naver-review-blog',
+    status: 'SUCCESS', attempts: [first, second] }} isLoading={false} />)
+  const rows = screen.getAllByRole('cell', { name: '한촌 / 서울점' }).map((cell) => cell.closest('tr')!)
+  const attemptColumn = screen.getAllByRole('columnheader').findIndex((header) => header.textContent === '시도')
+  expect(rows).toHaveLength(2)
+  expect(within(rows[0]!).getAllByRole('cell')[attemptColumn]?.textContent).toBe('1')
+  expect(within(rows[0]!).getByText('실패')).toBeTruthy()
+  expect(within(rows[0]!).getByText('PAGE_LOAD_FAILED')).toBeTruthy()
+  expect(within(rows[1]!).getAllByRole('cell')[attemptColumn]?.textContent).toBe('2')
+  expect(within(rows[1]!).getByText('성공')).toBeTruthy()
+  expect(within(rows[1]!).queryByText('PAGE_LOAD_FAILED')).toBeNull()
+})
 
 it.each([
   ['naver-review-visitor', 'manual', 'single-store', '네이버 방문자 리뷰', '수동 실행', '단일 매장'],

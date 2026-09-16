@@ -104,6 +104,11 @@ export function RunDetailDropdown({
                 <div><dt className="text-muted-foreground">대상 시작일</dt><dd className="mt-1">{run.target_date_from}</dd></div>
                 <div><dt className="text-muted-foreground">대상 종료일</dt><dd className="mt-1">{run.target_date_to}</dd></div>
               </>}
+              {isReview && <>
+                <div><dt className="text-muted-foreground">대상 매장</dt><dd className="mt-1">{formatCount(run.target_store_count ?? null)}</dd></div>
+                <div><dt className="text-muted-foreground">성공 매장</dt><dd className="mt-1">{formatCount(run.successful_units)}</dd></div>
+                <div><dt className="text-muted-foreground">실패 매장</dt><dd className="mt-1">{formatCount(run.failed_units)}</dd></div>
+              </>}
               {run.collector_id === 'naver-store-hours' && <>
                 {[
                   ['상위 실행 ID', run.parent_run_id ?? '-'],

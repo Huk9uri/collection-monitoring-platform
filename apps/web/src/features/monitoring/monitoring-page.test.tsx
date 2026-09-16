@@ -286,7 +286,8 @@ describe('MonitoringPage', () => {
 
   it('리뷰 수동 성공은 이력과 인라인 상세에 표시하고 서버의 정기 미실행 카드와 KPI를 유지한다', async () => {
     const manual: CollectorRun = { ...successfulRun, collector_id: 'naver-review-visitor',
-      execution_kind: 'manual', target_kind: 'single-store', target_place_id: '777' }
+      execution_kind: 'manual', target_kind: 'single-store', target_place_id: '777', target_store_count: 1,
+      successful_units: 1, failed_units: 0 }
     mockApi({ runs: [manual], detail: manual,
       collectors: [{ ...toCollectorSummary(manual), display_name: '네이버 방문자 리뷰', status: 'NOT_RUN', latest_run: null }] })
     renderPage()
@@ -304,6 +305,10 @@ describe('MonitoringPage', () => {
     const detail = await within(table).findByRole('region', { name: '실행 상세' })
     await waitFor(() => expect(within(detail).getByText('777')).toBeTruthy())
     expect(within(detail).getByText('수동 실행')).toBeTruthy()
+    const field = (label: string) => within(detail).getByText(label, { selector: 'dt' }).parentElement?.querySelector('dd')?.textContent
+    expect(field('대상 매장')).toBe('1')
+    expect(field('성공 매장')).toBe('1')
+    expect(field('실패 매장')).toBe('0')
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 

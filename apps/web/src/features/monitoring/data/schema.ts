@@ -91,6 +91,7 @@ export const collectorRunSchema = z.object({
   target_date_from: z.iso.date().nullable().optional(),
   target_date_to: z.iso.date().nullable().optional(),
   target_place_id: z.string().nullable().optional(),
+  target_store_count: z.number().int().nonnegative().nullable().optional(),
   review_count: z.number().int().nonnegative().nullable().optional(),
   failure_count: z.number().int().nonnegative().nullable().optional(),
   applied_count: z.number().int().nonnegative().nullable().optional(),

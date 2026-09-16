@@ -97,6 +97,18 @@ describe('utcDateTimeSchema', () => {
 })
 
 describe('FastAPI 응답 계약', () => {
+  it.each([0, 10, null])('대상 매장 수 %s를 응답에 보존한다', (target_store_count) => {
+    expect(collectorRunSchema.parse({ ...validRun, target_store_count })).toHaveProperty('target_store_count', target_store_count)
+  })
+
+  it('대상 매장 수 누락은 기존 수집기와 호환한다', () => {
+    expect(collectorRunSchema.safeParse(validRun).success).toBe(true)
+  })
+
+  it.each([-1, 1.5])('잘못된 대상 매장 수 %s를 거부한다', (target_store_count) => {
+    expect(collectorRunSchema.safeParse({ ...validRun, target_store_count }).success).toBe(false)
+  })
+
   it('정기 슬롯 UTC 시각을 보존하고 기존 누락과 null은 호환한다', () => {
     expect(collectorRunSchema.parse({ ...validRun, scheduled_at: '2026-09-07T22:00:00Z' })).toHaveProperty('scheduled_at', '2026-09-07T22:00:00Z')
     expect(collectorRunSchema.parse({ ...validRun, scheduled_at: null })).toHaveProperty('scheduled_at', null)
