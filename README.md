@@ -82,6 +82,13 @@ SmartPlace는 naverDB의 `SMARTPLACE_COLLECTION_RUN`과
 [`docs/운영/smartplace-사후-모니터링.md`](docs/운영/smartplace-사후-모니터링.md)를
 따릅니다.
 
+네이버 방문자·블로그 리뷰는 naverDB의 감사 RUN·ATTEMPT와 업무 데이터 날짜를
+SELECT 전용으로 모니터링합니다. 정책 화면의 07:00/07:30 기준은 실제 Windows
+작업 스케줄러를 바꾸지 않으며, DDL·배포·크롤러 교체·Scheduler 변경은 별도 승인이
+필요합니다. 적용 순서, 정기 슬롯 귀속, 수동/백필 이력 범위와 롤백은
+[`docs/운영/naver-review-사후-모니터링.md`](docs/운영/naver-review-사후-모니터링.md)를
+따릅니다.
+
 ## MVP 원칙
 
 - 읽기 전용 모니터링
