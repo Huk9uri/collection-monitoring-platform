@@ -1,4 +1,5 @@
 import { collectorDisplayName } from './collector-card'
+import { executionKindLabel, targetKindLabel } from './run-labels'
 import { Badge } from '../../../components/ui/badge'
 import {
   Table,
@@ -46,6 +47,7 @@ export function RunDetailDropdown({
   isLoading,
   error,
 }: RunDetailDropdownProps) {
+  const isReview = run?.collector_id === 'naver-review-visitor' || run?.collector_id === 'naver-review-blog'
   return (
     <section
       id={id}
@@ -95,11 +97,17 @@ export function RunDetailDropdown({
                 <dd className="mt-1">{formatSeoulDateTime(run.completed_at)}</dd>
               </div>
               <div><dt className="text-muted-foreground">수집기</dt><dd>{collectorDisplayName(run.collector_id)}</dd></div>
+              <div><dt className="text-muted-foreground">실행 유형</dt><dd className="mt-1">{executionKindLabel(run.execution_kind)}</dd></div>
+              <div><dt className="text-muted-foreground">대상 유형</dt><dd className="mt-1">{targetKindLabel(run.target_kind)}</dd></div>
+              {run.target_kind === 'single-store' && <div><dt className="text-muted-foreground">대상 매장 ID</dt><dd className="mt-1 break-all">{run.target_place_id}</dd></div>}
+              {run.target_kind === 'date-range' && <>
+                <div><dt className="text-muted-foreground">대상 시작일</dt><dd className="mt-1">{run.target_date_from}</dd></div>
+                <div><dt className="text-muted-foreground">대상 종료일</dt><dd className="mt-1">{run.target_date_to}</dd></div>
+              </>}
               {run.collector_id === 'naver-store-hours' && <>
                 {[
                   ['상위 실행 ID', run.parent_run_id ?? '-'],
                   ['원시 실행 결과', run.raw_status ?? '-'],
-                  ['실행 유형', run.execution_kind === 'scheduled' ? '예약 실행' : run.execution_kind === 'preflight-only' ? '사전 점검 전용' : '-'],
                   ['대상 매장', formatCount(run.source_count)],
                   ['검토 매장', formatCount(run.review_count ?? null)],
                   ['실패 매장', formatCount(run.failure_count ?? null)],
@@ -124,7 +132,7 @@ export function RunDetailDropdown({
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>작업</TableHead>
+                    <TableHead>{isReview ? '매장' : '작업'}</TableHead>
                     <TableHead>시도</TableHead>
                     <TableHead>단계</TableHead>
                     <TableHead>시각 근거</TableHead>
@@ -132,7 +140,7 @@ export function RunDetailDropdown({
                     <TableHead>매장 코드</TableHead>
                     <TableHead>DB 반영</TableHead>
                     <TableHead>결과</TableHead>
-                    <TableHead>원천</TableHead>
+                    <TableHead>{isReview ? '확인' : '원천'}</TableHead>
                     <TableHead>신규</TableHead>
                     <TableHead>변경</TableHead>
                     <TableHead>동일</TableHead>

@@ -156,6 +156,7 @@ function toCollectorSummary(run: CollectorRun): CollectorSummary {
 }
 
 interface ApiScenario {
+  detail?: CollectorRun
   runs?: CollectorRun[]
   collectors?: CollectorSummary[]
   errors?: SourceError[]
@@ -167,6 +168,7 @@ interface ApiScenario {
 }
 
 function mockApi({
+  detail = partialFailedRun,
   runs = [successfulRun, partialFailedRun],
   collectors = runs.map(toCollectorSummary),
   errors = [],
@@ -221,7 +223,7 @@ function mockApi({
         ? { items: serverRuns, errors, source_status: sourceStatus, total }
         : url.includes('/runs/')
           ? {
-              items: [partialFailedRun],
+              items: [detail],
               errors: [],
               source_status: availableSourceStatus,
             }
@@ -266,6 +268,45 @@ afterEach(() => {
 })
 
 describe('MonitoringPage', () => {
+  it.each([
+    ['ABORTED', 'RUNNING', '중단', '장애1'],
+    ['WARNING', 'SUCCESS', '주의', '주의1'],
+  ] as const)('리뷰 %s 서버 정책 결과를 저장 실행 상태 %s와 분리해 표시한다', async (status, storedStatus, label, kpi) => {
+    const scheduled: CollectorRun = { ...successfulRun, collector_id: 'naver-review-blog',
+      execution_kind: 'scheduled', target_kind: 'all-stores', status: storedStatus }
+    mockApi({ runs: [scheduled], collectors: [{ ...toCollectorSummary(scheduled),
+      display_name: '네이버 블로그 리뷰', status }] })
+    renderPage()
+    const card = await screen.findByRole('article', { name: '네이버 블로그 리뷰 최신 상태' })
+    expect(within(card).getByText(label)).toBeTruthy()
+    expect(screen.getByRole('region', { name: '수집기 상태 요약' }).textContent).toContain(kpi)
+    const table = screen.getByRole('table', { name: '수집 실행 이력' })
+    expect(within(table).getByText(storedStatus === 'RUNNING' ? '실행 중' : '정상')).toBeTruthy()
+  })
+
+  it('리뷰 수동 성공은 이력과 인라인 상세에 표시하고 서버의 정기 미실행 카드와 KPI를 유지한다', async () => {
+    const manual: CollectorRun = { ...successfulRun, collector_id: 'naver-review-visitor',
+      execution_kind: 'manual', target_kind: 'single-store', target_place_id: '777' }
+    mockApi({ runs: [manual], detail: manual,
+      collectors: [{ ...toCollectorSummary(manual), display_name: '네이버 방문자 리뷰', status: 'NOT_RUN', latest_run: null }] })
+    renderPage()
+    const card = await screen.findByRole('article', { name: '네이버 방문자 리뷰 최신 상태' })
+    expect(within(card).getByText('미실행')).toBeTruthy()
+    const kpis = screen.getByRole('region', { name: '수집기 상태 요약' })
+    expect(kpis.textContent).toContain('정상0')
+    expect(kpis.textContent).toContain('미실행1')
+    const table = screen.getByRole('table', { name: '수집 실행 이력' })
+    expect(within(table).getByText('네이버 방문자 리뷰')).toBeTruthy()
+    expect(within(table).getByText('수동 실행')).toBeTruthy()
+    expect(within(table).getByText('단일 매장')).toBeTruthy()
+    expect(within(table).queryByText('777')).toBeNull()
+    fireEvent.click(within(table).getByRole('button', { name: `실행 ${manual.run_id} 상세 보기` }))
+    const detail = await within(table).findByRole('region', { name: '실행 상세' })
+    await waitFor(() => expect(within(detail).getByText('777')).toBeTruthy())
+    expect(within(detail).getByText('수동 실행')).toBeTruthy()
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
   it('읽기 전용 헤더에 제목과 수동 새로고침만 제공한다', () => {
     mockApi({ pending: true })
     renderPage()

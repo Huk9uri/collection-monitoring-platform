@@ -15,6 +15,7 @@ import type { CollectorRun, MonitoringStatus } from '../data/schema'
 import { formatCount } from '../data/format-count'
 import { collectorDisplayName } from './collector-card'
 import { RunDetailDropdown } from './run-detail-dropdown'
+import { executionKindLabel, targetKindLabel } from './run-labels'
 import {
   formatSeoulDateTime,
   StatusBadge,
@@ -182,6 +183,8 @@ export function RunsTable({
                 <TableHead>실행 ID</TableHead>
                 <TableHead>수집기</TableHead>
                 <TableHead>브랜드</TableHead>
+                <TableHead>실행 유형</TableHead>
+                <TableHead>대상 유형</TableHead>
                 <TableHead>상태</TableHead>
                 <TableHead>시작</TableHead>
                 <TableHead>원천</TableHead>
@@ -193,7 +196,7 @@ export function RunsTable({
             <TableBody>
               {runs.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="h-24 text-center text-muted-foreground">
+                  <TableCell colSpan={11} className="h-24 text-center text-muted-foreground">
                     선택한 조건의 실행 이력이 없습니다.
                   </TableCell>
                 </TableRow>
@@ -225,6 +228,8 @@ export function RunsTable({
                     </TableCell>
                     <TableCell>{collectorDisplayName(run.collector_id)}</TableCell>
                     <TableCell>{run.scope_name ?? '-'}</TableCell>
+                    <TableCell>{executionKindLabel(run.execution_kind)}</TableCell>
+                    <TableCell>{targetKindLabel(run.target_kind)}</TableCell>
                     <TableCell>
                       <StatusBadge status={run.status} />
                     </TableCell>
@@ -236,7 +241,7 @@ export function RunsTable({
                       </TableRow>
                       {isExpanded ? (
                         <TableRow className="bg-muted/20 hover:bg-muted/20">
-                          <TableCell colSpan={9} className="whitespace-normal p-3 sm:p-4">
+                          <TableCell colSpan={11} className="whitespace-normal p-3 sm:p-4">
                             <RunDetailDropdown
                               id={detailId}
                               run={detailRun}

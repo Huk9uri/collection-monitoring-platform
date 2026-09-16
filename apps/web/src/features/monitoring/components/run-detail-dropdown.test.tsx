@@ -6,6 +6,42 @@ import { RunDetailDropdown } from './run-detail-dropdown'
 
 afterEach(cleanup)
 
+it.each([
+  ['naver-review-visitor', 'manual', 'single-store', '네이버 방문자 리뷰', '수동 실행', '단일 매장'],
+  ['naver-review-blog', 'backfill', 'date-range', '네이버 블로그 리뷰', '과거 데이터 보충', '기간 지정'],
+  ['naver-review-visitor', 'scheduled', 'all-stores', '네이버 방문자 리뷰', '정기 실행', '전체 매장'],
+] as const)('리뷰 상세에 %s %s의 실행 종류와 대상 및 매장 결과를 표시한다',
+  (collectorId, execution, target, name, executionLabel, targetLabel) => {
+    const run: CollectorRun = { ...partialFailedRun, collector_id: collectorId,
+      execution_kind: execution, target_kind: target,
+      target_place_id: target === 'single-store' ? '777' : null,
+      target_date_from: target === 'date-range' ? '2026-09-01' : null,
+      target_date_to: target === 'date-range' ? '2026-09-07' : null,
+    }
+    render(<RunDetailDropdown run={run} isLoading={false} />)
+    const field = (label: string) => screen.getByText(label, { selector: 'dt' }).parentElement?.querySelector('dd')?.textContent
+    expect(field('수집기')).toBe(name)
+    expect(field('실행 유형')).toBe(executionLabel)
+    expect(field('대상 유형')).toBe(targetLabel)
+    expect(screen.getByRole('columnheader', { name: '매장' })).toBeTruthy()
+    expect(screen.getByRole('columnheader', { name: '확인' })).toBeTruthy()
+    if (target === 'single-store') expect(field('대상 매장 ID')).toBe('777')
+    if (target === 'date-range') {
+      expect(field('대상 시작일')).toBe('2026-09-01')
+      expect(field('대상 종료일')).toBe('2026-09-07')
+    }
+    expect(screen.getByText('육수당').closest('tr')?.textContent).toContain('DB_WRITE_FAILED')
+    expect(screen.getByText('한촌설렁탕').closest('tr')?.textContent).toContain('성공')
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+it('실행 종류와 대상 종류가 없는 기존 수집기는 미확인으로 표시한다', () => {
+  render(<RunDetailDropdown run={partialFailedRun} isLoading={false} />)
+  for (const label of ['실행 유형', '대상 유형']) {
+    expect(screen.getByText(label, { selector: 'dt' }).parentElement?.querySelector('dd')?.textContent).toBe('-')
+  }
+})
+
 const partialFailedRun: CollectorRun = {
   collector_id: 'fcdaum',
   run_id: '00000000-0000-4000-8000-000000000001',

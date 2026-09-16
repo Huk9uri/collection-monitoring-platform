@@ -7,6 +7,8 @@ export function collectorDisplayName(collectorId: string) {
   if (collectorId === 'fcdaum') return 'FC다움'
   if (collectorId === 'hmr') return 'HMR'
   if (collectorId === 'naver-store-hours') return '네이버 영업시간'
+  if (collectorId === 'naver-review-visitor') return '네이버 방문자 리뷰'
+  if (collectorId === 'naver-review-blog') return '네이버 블로그 리뷰'
   return collectorId
 }
 

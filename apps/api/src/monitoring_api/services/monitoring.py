@@ -443,20 +443,31 @@ class MonitoringService:
         for item in controlled.freshness():
             sla = policy.freshness.get(item.dataset_id)
             freshness.append(item.model_copy(update={
+                'last_successful_check_at': item.last_successful_check_at if item.scope_id is not None else checked,
                 'freshness_sla_minutes': sla,
                 'freshness_overdue': sla is not None and (item.latest_data_at is None or now - item.latest_data_at > timedelta(minutes=sla)),
             }))
         status = latest.status if latest else MonitoringStatus.NOT_RUN
         due = previous_occurrence(policy, now)
         if due and now >= due + timedelta(minutes=policy.start_grace_minutes) and not hasattr(adapter, 'with_monitoring_policy'):
+            def attributed(run: CollectorRun | None) -> bool:
+                # 실행 종류가 없는 기존 수집기는 시작 시각으로 귀속한다.
+                # 명시적 수동/보충 실행은 정기 회차를 충족할 수 없다.
+                return bool(
+                    run is not None
+                    and run.execution_kind in (None, 'scheduled')
+                    and (run.execution_kind is None or run.scheduled_date == due.astimezone(ZoneInfo(policy.timezone_name)).date())
+                    and previous_occurrence(policy, run.started_at) == due
+                    and run.started_at < due + timedelta(minutes=policy.schedule_attribution_window_minutes)
+                )
+
             candidates = controlled.list_runs(started_from=due,
                 started_to=min(now, due + timedelta(minutes=policy.schedule_attribution_window_minutes)), limit=1)
             candidate = candidates[0] if candidates else None
-            if candidate and candidate.started_at < due + timedelta(minutes=policy.schedule_attribution_window_minutes):
+            if attributed(candidate):
                 latest = candidate
                 status = latest.status
-            attributed = latest is not None and previous_occurrence(policy, latest.started_at) == due and latest.started_at < due + timedelta(minutes=policy.schedule_attribution_window_minutes)
-            if not attributed:
+            if not attributed(latest):
                 status = MonitoringStatus.NOT_RUN
         if latest and latest.status == MonitoringStatus.RUNNING and policy.max_duration_minutes is not None and now - latest.started_at > timedelta(minutes=policy.max_duration_minutes):
             status = MonitoringStatus.ABORTED
