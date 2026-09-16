@@ -93,6 +93,10 @@ FRESHNESS_SQL = {
     "visitor": "SELECT MAX(CONVERT(date, [date])) AS latest_date FROM dbo.naver_review_visitor",
     "blog": "SELECT MAX(CONVERT(date, [date])) AS latest_date FROM dbo.naver_review_blog",
 }
+DATASET_IDS = {
+    "visitor": "visitor-reviews",
+    "blog": "blog-reviews",
+}
 
 
 def _status(value: object) -> MonitoringStatus:
@@ -217,7 +221,7 @@ class NaverReviewAdapter:
         elif latest is not None and not isinstance(latest, date):
             latest = date.fromisoformat(str(latest))
         return [FreshnessRecord(
-            collector_id=self.collector_id, dataset_id=self.review_kind,
+            collector_id=self.collector_id, dataset_id=DATASET_IDS[self.review_kind],
             latest_data_at=(
                 datetime.combine(latest, time.min, tzinfo=_KST).astimezone(UTC)
                 if latest is not None else None

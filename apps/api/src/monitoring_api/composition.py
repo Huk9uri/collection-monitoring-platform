@@ -7,6 +7,7 @@ from pydantic import SecretStr
 from monitoring_api.adapters.base import CollectorAdapter
 from monitoring_api.adapters.fcdaum import FcDaumAdapter
 from monitoring_api.adapters.hmr import HmrAdapter
+from monitoring_api.adapters.naver_review import NaverReviewAdapter
 from monitoring_api.adapters.smartplace import (
     ExpectedScope,
     SmartPlaceAdapter,
@@ -138,6 +139,18 @@ def build_monitoring_service(settings: Settings) -> MonitoringService:
                     query_timeout_seconds=settings.db_query_timeout_seconds,
                 ),
                 policy=policy,
+            )
+        )
+    if connection_string := _reveal(settings.naver_review_connection_string):
+        repository = ReadOnlyRepository(
+            connection_string,
+            connect_timeout_seconds=settings.db_connect_timeout_seconds,
+            query_timeout_seconds=settings.db_query_timeout_seconds,
+        )
+        adapters.extend(
+            (
+                NaverReviewAdapter(repository, review_kind="visitor"),
+                NaverReviewAdapter(repository, review_kind="blog"),
             )
         )
     return MonitoringService(

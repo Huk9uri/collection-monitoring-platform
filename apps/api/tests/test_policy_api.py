@@ -1,5 +1,7 @@
 from unittest.mock import Mock
 from test_auth_session_api import client
+from monitoring_api.config import Settings
+from monitoring_api.policy_composition import build_policy_service
 
 
 def test_admin_save_and_conflict_contract():
@@ -29,3 +31,29 @@ def test_invalid_policy_never_reaches_repository():
                         headers={'Origin':'https://testserver', 'X-CSRF-Token':'csrf'})
     assert response.status_code == 422
     service.save.assert_not_called()
+
+
+def test_review_collectors_are_exposed_on_schedule_settings_screen():
+    http, _ = client("viewer")
+    http.cookies.set("__Host-monitoring-session", "token")
+    http.app.state.policy_service = build_policy_service(
+        Settings(_env_file=None),
+        ["naver-review-visitor", "naver-review-blog"],
+    )
+
+    response = http.get("/api/v1/settings/schedules")
+
+    assert response.status_code == 200
+    items = {item["collector_id"]: item for item in response.json()["items"]}
+    assert items["naver-review-visitor"]["dataset_ids"] == ["visitor-reviews"]
+    assert items["naver-review-blog"]["dataset_ids"] == ["blog-reviews"]
+    assert items["naver-review-visitor"]["policy"]["schedules"][0] == {
+        "weekday_number": 1,
+        "scheduled_time": "07:00:00",
+        "schedule_enabled": True,
+    }
+    assert items["naver-review-blog"]["policy"]["schedules"][0] == {
+        "weekday_number": 1,
+        "scheduled_time": "07:30:00",
+        "schedule_enabled": True,
+    }

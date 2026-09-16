@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     fcdaum_connection_string: SecretStr | None = None
     hmr_connection_string: SecretStr | None = None
     smartplace_connection_string: SecretStr | None = None
+    naver_review_connection_string: SecretStr | None = None
     naver_store_hours_connection_string: SecretStr | None = None
     naver_store_hours_schedule_timezone: str | None = None
     naver_store_hours_weekly_scheduled_day: int | None = Field(default=None, ge=0, le=6)

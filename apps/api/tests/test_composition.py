@@ -10,6 +10,7 @@ import monitoring_api.composition as composition
 import monitoring_api.db as db
 from monitoring_api.composition import build_monitoring_service
 from monitoring_api.config import Settings
+from monitoring_api.policy_composition import build_policy_service
 from auth_helpers import create_admin_app as create_app
 
 
@@ -24,6 +25,11 @@ HMR_CONNECTION_STRING = (
 SMARTPLACE_CONNECTION_STRING = (
     "Driver={ODBC Driver 18 for SQL Server};Server=naver-db;"
     "Database=naverDB;UID=monitor_smartplace;PWD=smartplace-secret"
+)
+NAVER_REVIEW_CONNECTION_STRING = (
+    "Driver={ODBC Driver 18 for SQL Server};Server=naver-review-db;"
+    "Database=naverDB;UID=monitor_naver_review;PWD=naver-review-secret;"
+    "ApplicationIntent=ReadOnly"
 )
 
 
@@ -69,6 +75,9 @@ def test_settings_loads_optional_connection_strings_as_masked_secrets(
     monkeypatch.setenv(
         "MONITORING_SMARTPLACE_CONNECTION_STRING", SMARTPLACE_CONNECTION_STRING
     )
+    monkeypatch.setenv(
+        "MONITORING_NAVER_REVIEW_CONNECTION_STRING", NAVER_REVIEW_CONNECTION_STRING
+    )
     monkeypatch.setenv("MONITORING_SMARTPLACE_SCHEDULE_TIMEZONE", "Asia/Seoul")
     monkeypatch.setenv("MONITORING_SMARTPLACE_DAILY_SCHEDULED_TIME", "04:00")
     monkeypatch.setenv("MONITORING_SMARTPLACE_START_GRACE_MINUTES", "15")
@@ -83,6 +92,7 @@ def test_settings_loads_optional_connection_strings_as_masked_secrets(
     assert isinstance(settings.fcdaum_connection_string, SecretStr)
     assert isinstance(settings.hmr_connection_string, SecretStr)
     assert isinstance(settings.smartplace_connection_string, SecretStr)
+    assert isinstance(settings.naver_review_connection_string, SecretStr)
     assert (
         settings.fcdaum_connection_string.get_secret_value()
         == FCDAUM_CONNECTION_STRING
@@ -92,12 +102,61 @@ def test_settings_loads_optional_connection_strings_as_masked_secrets(
         settings.smartplace_connection_string.get_secret_value()
         == SMARTPLACE_CONNECTION_STRING
     )
+    assert (
+        settings.naver_review_connection_string.get_secret_value()
+        == NAVER_REVIEW_CONNECTION_STRING
+    )
     assert settings.smartplace_schedule_attribution_window_minutes == 60
     rendered = f"{settings!s} {settings!r}"
     assert "fcdaum-secret" not in rendered
     assert "hmr-secret" not in rendered
     assert "smartplace-secret" not in rendered
+    assert "naver-review-secret" not in rendered
     assert "**********" in rendered
+
+
+def test_one_review_connection_registers_two_collectors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(composition, "ReadOnlyRepository", ReadyRepository)
+    settings = Settings(
+        naver_review_connection_string=NAVER_REVIEW_CONNECTION_STRING,
+        _env_file=None,
+    )
+
+    service = build_monitoring_service(settings)
+
+    assert set(service.collector_ids) == {
+        "naver-review-visitor",
+        "naver-review-blog",
+    }
+    assert ReadyRepository.created_with == [NAVER_REVIEW_CONNECTION_STRING]
+    assert ReadyRepository.created_timeouts == [(5, 30)]
+
+
+def test_review_adapters_and_policy_service_use_same_dataset_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(composition, "ReadOnlyRepository", ReadyRepository)
+    settings = Settings(
+        naver_review_connection_string=NAVER_REVIEW_CONNECTION_STRING,
+        _env_file=None,
+    )
+    monitoring_service = build_monitoring_service(settings)
+    policy_service = build_policy_service(
+        settings, monitoring_service.collector_ids
+    )
+
+    actual_dataset_ids = {
+        item.collector_id: item.dataset_id
+        for item in monitoring_service.freshness().items
+    }
+    policy_dataset_ids = {
+        collector_id: next(iter(dataset_ids))
+        for collector_id, dataset_ids in policy_service.datasets.items()
+    }
+
+    assert actual_dataset_ids == policy_dataset_ids
 
 
 def test_composition_registers_both_configured_sources(

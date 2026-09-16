@@ -239,7 +239,7 @@ def test_business_dates_are_kind_specific_kst_midnight_normalized_to_utc(repo, k
     assert len(records) == 1
     assert records[0].latest_data_at == expected
     assert records[0].collector_id == f"naver-review-{kind}"
-    assert records[0].dataset_id == kind
+    assert records[0].dataset_id == f"{kind}-reviews"
 
 
 def test_empty_source_and_readiness(repo):
