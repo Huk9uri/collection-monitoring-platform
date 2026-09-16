@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -113,6 +114,14 @@ def test_settings_loads_optional_connection_strings_as_masked_secrets(
     assert "smartplace-secret" not in rendered
     assert "naver-review-secret" not in rendered
     assert "**********" in rendered
+
+
+def test_naver_review_env_example_references_actual_crawler_database_key() -> None:
+    env_example = Path(__file__).resolve().parents[3] / ".env.example"
+    contents = env_example.read_text(encoding="utf-8")
+
+    assert "NAVER_DB_NAME" in contents
+    assert "NAVER_DB_DATABASE" not in contents
 
 
 def test_one_review_connection_registers_two_collectors(
