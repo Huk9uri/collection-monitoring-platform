@@ -80,7 +80,17 @@ export const collectorRunSchema = z.object({
   run_id: z.uuid(),
   parent_run_id: z.uuid().nullable().optional(),
   raw_status: z.string().nullable().optional(),
-  execution_kind: z.enum(['scheduled', 'preflight-only']).nullable().optional(),
+  execution_kind: z
+    .enum(['scheduled', 'manual', 'backfill', 'preflight-only'])
+    .nullable()
+    .optional(),
+  target_kind: z
+    .enum(['all-stores', 'single-store', 'date-range'])
+    .nullable()
+    .optional(),
+  target_date_from: z.iso.date().nullable().optional(),
+  target_date_to: z.iso.date().nullable().optional(),
+  target_place_id: z.string().nullable().optional(),
   review_count: z.number().int().nonnegative().nullable().optional(),
   failure_count: z.number().int().nonnegative().nullable().optional(),
   applied_count: z.number().int().nonnegative().nullable().optional(),
@@ -102,6 +112,70 @@ export const collectorRunSchema = z.object({
   unchanged_count: z.number().int().nullable(),
   attempts: z.array(collectorAttemptSchema),
 })
+  .superRefine(
+    (
+      { target_kind, target_date_from, target_date_to, target_place_id },
+      context,
+    ) => {
+      if (target_kind === undefined || target_kind === null) {
+        return
+      }
+
+      if (target_kind === 'all-stores') {
+        if (
+          target_place_id != null ||
+          target_date_from != null ||
+          target_date_to != null
+        ) {
+          context.addIssue({
+            code: 'custom',
+            message: '전체 매장 실행에는 대상 ID나 날짜를 지정할 수 없습니다.',
+            path: ['target_kind'],
+          })
+        }
+        return
+      }
+
+      if (target_kind === 'single-store') {
+        if (!target_place_id?.trim()) {
+          context.addIssue({
+            code: 'custom',
+            message: '단일 매장 실행에는 비어 있지 않은 대상 place ID가 필요합니다.',
+            path: ['target_place_id'],
+          })
+        }
+        if (target_date_from != null || target_date_to != null) {
+          context.addIssue({
+            code: 'custom',
+            message: '단일 매장 실행에는 대상 날짜를 지정할 수 없습니다.',
+            path: ['target_date_from'],
+          })
+        }
+        return
+      }
+
+      if (target_date_from == null || target_date_to == null) {
+        context.addIssue({
+          code: 'custom',
+          message: '기간 실행에는 시작일과 종료일이 모두 필요합니다.',
+          path: ['target_date_to'],
+        })
+      } else if (target_date_from > target_date_to) {
+        context.addIssue({
+          code: 'custom',
+          message: '기간 실행의 종료일은 시작일보다 빠를 수 없습니다.',
+          path: ['target_date_to'],
+        })
+      }
+      if (target_place_id !== undefined && target_place_id !== null) {
+        context.addIssue({
+          code: 'custom',
+          message: '기간 실행에는 대상 place ID를 지정할 수 없습니다.',
+          path: ['target_place_id'],
+        })
+      }
+    },
+  )
 
 export const freshnessRecordSchema = z.object({
   collector_id: z.string(),

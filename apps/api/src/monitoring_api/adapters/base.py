@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
-from typing import Literal, Protocol
+from typing import Literal, Protocol, Self
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from monitoring_api.models import MonitoringStatus
 
@@ -58,7 +58,13 @@ class CollectorRun(BaseModel):
     scope_name: str | None = None
     parent_run_id: UUID | None = None
     raw_status: str | None = None
-    execution_kind: Literal["scheduled", "preflight-only"] | None = None
+    execution_kind: (
+        Literal["scheduled", "manual", "backfill", "preflight-only"] | None
+    ) = None
+    target_kind: Literal["all-stores", "single-store", "date-range"] | None = None
+    target_date_from: date | None = None
+    target_date_to: date | None = None
+    target_place_id: str | None = None
     review_count: int | None = None
     failure_count: int | None = None
     applied_count: int | None = None
@@ -72,6 +78,40 @@ class CollectorRun(BaseModel):
     @classmethod
     def require_utc(cls, value: datetime | None) -> datetime | None:
         return require_utc_datetime(value)
+
+    @model_validator(mode="after")
+    def validate_target(self) -> Self:
+        """리뷰 실행의 대상 종류와 대상 메타데이터 조합을 제한한다."""
+
+        if self.target_kind is None:
+            return self
+
+        if self.target_kind == "all-stores":
+            if any(
+                value is not None
+                for value in (
+                    self.target_place_id,
+                    self.target_date_from,
+                    self.target_date_to,
+                )
+            ):
+                raise ValueError("전체 매장 실행에는 대상 ID나 날짜를 지정할 수 없습니다.")
+            return self
+
+        if self.target_kind == "single-store":
+            if not self.target_place_id or not self.target_place_id.strip():
+                raise ValueError("단일 매장 실행에는 비어 있지 않은 대상 place ID가 필요합니다.")
+            if self.target_date_from is not None or self.target_date_to is not None:
+                raise ValueError("단일 매장 실행에는 대상 날짜를 지정할 수 없습니다.")
+            return self
+
+        if self.target_date_from is None or self.target_date_to is None:
+            raise ValueError("기간 실행에는 시작일과 종료일이 모두 필요합니다.")
+        if self.target_date_from > self.target_date_to:
+            raise ValueError("기간 실행의 종료일은 시작일보다 빠를 수 없습니다.")
+        if self.target_place_id is not None:
+            raise ValueError("기간 실행에는 대상 place ID를 지정할 수 없습니다.")
+        return self
 
 
 class FreshnessRecord(BaseModel):

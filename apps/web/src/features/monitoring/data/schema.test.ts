@@ -13,6 +13,10 @@ import {
 const validRun = {
   collector_id: 'fcdaum',
   run_id: '00000000-0000-4000-8000-000000000001',
+  target_kind: null,
+  target_date_from: null,
+  target_date_to: null,
+  target_place_id: null,
   scheduled_date: '2026-09-08',
   started_at: '2026-09-08T01:00:00Z',
   completed_at: '2026-09-08T01:03:00+00:00',
@@ -93,6 +97,65 @@ describe('utcDateTimeSchema', () => {
 })
 
 describe('FastAPI 응답 계약', () => {
+  it.each(['scheduled', 'manual', 'backfill'] as const)(
+    '실행 종류 %s를 허용한다',
+    (kind) => {
+      expect(
+        collectorRunSchema.parse({ ...validRun, execution_kind: kind })
+          .execution_kind,
+      ).toBe(kind)
+    },
+  )
+
+  it('기간 대상은 시작일과 종료일이 모두 있고 순서가 맞아야 한다', () => {
+    expect(
+      collectorRunSchema.safeParse({
+        ...validRun,
+        target_kind: 'date-range',
+        target_date_from: '2026-02-01',
+        target_date_to: null,
+      }).success,
+    ).toBe(false)
+    expect(
+      collectorRunSchema.safeParse({
+        ...validRun,
+        target_kind: 'date-range',
+        target_date_from: '2026-02-02',
+        target_date_to: '2026-02-01',
+      }).success,
+    ).toBe(false)
+  })
+
+  it('단일 매장은 비어 있지 않은 place ID만 허용한다', () => {
+    expect(
+      collectorRunSchema.safeParse({
+        ...validRun,
+        target_kind: 'single-store',
+        target_place_id: ' ',
+      }).success,
+    ).toBe(false)
+  })
+
+  it('전체 매장은 대상 ID와 날짜를 허용하지 않는다', () => {
+    expect(
+      collectorRunSchema.safeParse({
+        ...validRun,
+        target_kind: 'all-stores',
+        target_place_id: '123456',
+      }).success,
+    ).toBe(false)
+  })
+
+  it('기존 수집기의 대상 메타데이터 누락을 허용한다', () => {
+    const legacyRun = { ...validRun }
+    Reflect.deleteProperty(legacyRun, 'target_kind')
+    Reflect.deleteProperty(legacyRun, 'target_date_from')
+    Reflect.deleteProperty(legacyRun, 'target_date_to')
+    Reflect.deleteProperty(legacyRun, 'target_place_id')
+
+    expect(collectorRunSchema.parse(legacyRun).target_kind).toBeUndefined()
+  })
+
   it('실행 ID를 실제 uniqueidentifier 계약과 같은 UUID로 제한한다', () => {
     expect(collectorRunSchema.safeParse(validRun).success).toBe(true)
     expect(
