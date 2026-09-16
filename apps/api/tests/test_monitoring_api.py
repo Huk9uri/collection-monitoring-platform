@@ -201,6 +201,22 @@ def test_monitoring_get_routes_expose_service_results(client: TestClient) -> Non
     assert all(response.json()["errors"] == [] for response in responses.values())
 
 
+@pytest.mark.parametrize('scheduled_at', [None, datetime(2026, 9, 7, 22, tzinfo=UTC)])
+def test_declared_slot_survives_collector_history_and_detail_responses(client, scheduled_at):
+    class ScheduledAdapter(AvailableAdapter):
+        def _run(self):
+            return CollectorRun(**{**super()._run().model_dump(), 'scheduled_at': scheduled_at})
+
+    with use_service(client, MonitoringService([ScheduledAdapter()])):
+        for path in ['/api/v1/monitoring/collectors', '/api/v1/monitoring/runs',
+                     f'/api/v1/monitoring/runs/available/{RUN_ID}']:
+            response = client.get(path)
+            assert response.status_code == 200
+            item = response.json()['items'][0]
+            run = item['latest_run'] if path.endswith('collectors') else item
+            assert run['scheduled_at'] == (None if scheduled_at is None else '2026-09-07T22:00:00Z')
+
+
 def test_runs_accepts_exact_maximum_range_and_page_size(
     client: TestClient,
     available_adapter: AvailableAdapter,

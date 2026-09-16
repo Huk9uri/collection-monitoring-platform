@@ -325,11 +325,12 @@ class MonitoringService:
         policy = self._policies.get(adapter.collector_id, CollectorPolicy())
         snapshot = self.policy_service.get(adapter.collector_id) if self.policy_service else None
         dynamic_sla = snapshot['policy']['freshness'] if snapshot and snapshot['version'] and snapshot['policy'] else None
+        monitoring_enabled = snapshot['policy']['monitoring_enabled'] if dynamic_sla is not None else True
         enriched: list[FreshnessRecord] = []
         for record in records:
             sla = (timedelta(minutes=dynamic_sla[record.dataset_id]) if record.dataset_id in dynamic_sla else None) if dynamic_sla is not None else policy.freshness_sla.get(record.dataset_id)
             overdue = bool(
-                sla is not None
+                monitoring_enabled and sla is not None
                 and (record.latest_data_at is None or now - record.latest_data_at > sla)
             )
             enriched.append(
@@ -445,18 +446,20 @@ class MonitoringService:
             freshness.append(item.model_copy(update={
                 'last_successful_check_at': item.last_successful_check_at if item.scope_id is not None else checked,
                 'freshness_sla_minutes': sla,
-                'freshness_overdue': sla is not None and (item.latest_data_at is None or now - item.latest_data_at > timedelta(minutes=sla)),
+                'freshness_overdue': policy.monitoring_enabled and sla is not None and (item.latest_data_at is None or now - item.latest_data_at > timedelta(minutes=sla)),
             }))
         status = latest.status if latest else MonitoringStatus.NOT_RUN
         due = previous_occurrence(policy, now)
         if due and now >= due + timedelta(minutes=policy.start_grace_minutes) and not hasattr(adapter, 'with_monitoring_policy'):
             def attributed(run: CollectorRun | None) -> bool:
-                # 실행 종류가 없는 기존 수집기는 시작 시각으로 귀속한다.
-                # 명시적 수동/보충 실행은 정기 회차를 충족할 수 없다.
+                # 선언한 슬롯 시각이 있으면 지연 시작을 다른 회차로 재귀속하지 않는다.
+                # 시각이 없는 기존 수집기만 날짜·시작 시각 기반 귀속을 유지한다.
+                if run is None or run.execution_kind not in (None, 'scheduled'):
+                    return False
+                if run.scheduled_at is not None:
+                    return run.scheduled_at == due and due <= run.started_at < due + timedelta(minutes=policy.schedule_attribution_window_minutes)
                 return bool(
-                    run is not None
-                    and run.execution_kind in (None, 'scheduled')
-                    and (run.execution_kind is None or run.scheduled_date == due.astimezone(ZoneInfo(policy.timezone_name)).date())
+                    (run.execution_kind is None or run.scheduled_date == due.astimezone(ZoneInfo(policy.timezone_name)).date())
                     and previous_occurrence(policy, run.started_at) == due
                     and run.started_at < due + timedelta(minutes=policy.schedule_attribution_window_minutes)
                 )
@@ -464,12 +467,12 @@ class MonitoringService:
             candidates = controlled.list_runs(started_from=due,
                 started_to=min(now, due + timedelta(minutes=policy.schedule_attribution_window_minutes)), limit=1)
             candidate = candidates[0] if candidates else None
-            if attributed(candidate):
+            if candidate is not None and attributed(candidate):
                 latest = candidate
                 status = latest.status
             if not attributed(latest):
                 status = MonitoringStatus.NOT_RUN
-        if latest and latest.status == MonitoringStatus.RUNNING and policy.max_duration_minutes is not None and now - latest.started_at > timedelta(minutes=policy.max_duration_minutes):
+        if policy.monitoring_enabled and latest and latest.status == MonitoringStatus.RUNNING and policy.max_duration_minutes is not None and now - latest.started_at > timedelta(minutes=policy.max_duration_minutes):
             status = MonitoringStatus.ABORTED
         overdue = any(item.freshness_overdue for item in freshness)
         if overdue and status in (MonitoringStatus.SUCCESS, MonitoringStatus.SUCCESS_EMPTY):

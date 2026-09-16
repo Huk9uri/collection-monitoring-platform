@@ -99,6 +99,7 @@ export const collectorRunSchema = z.object({
   successful_check_at: utcDateTimeSchema.nullable().optional(),
   error_category: z.string().nullable().optional(),
   scheduled_date: z.iso.date(),
+  scheduled_at: utcDateTimeSchema.nullable().optional(),
   started_at: utcDateTimeSchema,
   completed_at: utcDateTimeSchema.nullable(),
   status: monitoringStatusSchema,

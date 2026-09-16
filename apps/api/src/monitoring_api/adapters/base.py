@@ -45,6 +45,7 @@ class CollectorRun(BaseModel):
     collector_id: str
     run_id: UUID
     scheduled_date: date
+    scheduled_at: datetime | None = None
     started_at: datetime
     completed_at: datetime | None
     status: MonitoringStatus
@@ -74,7 +75,7 @@ class CollectorRun(BaseModel):
     error_category: str | None = None
     attempts: list[CollectorAttempt] = Field(default_factory=list)
 
-    @field_validator("started_at", "completed_at")
+    @field_validator("started_at", "completed_at", "scheduled_at")
     @classmethod
     def require_utc(cls, value: datetime | None) -> datetime | None:
         return require_utc_datetime(value)

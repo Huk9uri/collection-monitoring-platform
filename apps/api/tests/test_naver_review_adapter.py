@@ -116,6 +116,15 @@ def test_latest_ignores_newer_manual_success_after_scheduled_failure(repo):
     assert latest.started_at == datetime(2026, 9, 15, 22, 1, tzinfo=UTC)
 
 
+def test_declared_slot_is_preserved_in_latest_history_and_detail(repo):
+    repo.run(StartedAt='2026-09-15 23:05:00')
+    repo.run(OTHER, execution='manual')
+    adapter = NaverReviewAdapter(repo, review_kind='visitor')
+    for run in [adapter.latest(), adapter.list_runs()[0], adapter.get_run(RUN)]:
+        assert run.model_dump(mode='json')['scheduled_at'] == '2026-09-15T22:00:00Z'
+    assert adapter.get_run(OTHER).model_dump()['scheduled_at'] is None
+
+
 @pytest.mark.parametrize("kind,other", [("visitor", "blog"), ("blog", "visitor")])
 def test_review_kinds_are_isolated_in_every_run_query(repo, kind, other):
     repo.run(kind=kind)

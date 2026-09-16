@@ -70,6 +70,19 @@ def test_existing_collectors_accept_no_target_kind() -> None:
     assert make_run(collector_id="fcdaum").target_kind is None
 
 
+def test_declared_slot_is_optional_nullable_and_serialized_as_utc():
+    assert make_run().model_dump()['scheduled_at'] is None
+    assert make_run(scheduled_at=None).model_dump()['scheduled_at'] is None
+    assert make_run(scheduled_at=datetime(2026, 9, 8, 22, tzinfo=UTC)).model_dump(mode='json')['scheduled_at'] == '2026-09-08T22:00:00Z'
+
+
+@pytest.mark.parametrize('timestamp', [datetime(2026, 9, 8, 22),
+    datetime(2026, 9, 9, 7, tzinfo=timezone(timedelta(hours=9)))])
+def test_declared_slot_rejects_naive_and_non_utc(timestamp):
+    with pytest.raises(ValidationError, match='UTC'):
+        make_run(scheduled_at=timestamp)
+
+
 def test_run_preserves_scope_and_unknown_counts() -> None:
     """브랜드 실행과 실패 전 미확정 집계를 공개 계약에서 보존한다."""
 

@@ -97,6 +97,16 @@ describe('utcDateTimeSchema', () => {
 })
 
 describe('FastAPI 응답 계약', () => {
+  it('정기 슬롯 UTC 시각을 보존하고 기존 누락과 null은 호환한다', () => {
+    expect(collectorRunSchema.parse({ ...validRun, scheduled_at: '2026-09-07T22:00:00Z' })).toHaveProperty('scheduled_at', '2026-09-07T22:00:00Z')
+    expect(collectorRunSchema.parse({ ...validRun, scheduled_at: null })).toHaveProperty('scheduled_at', null)
+    expect(collectorRunSchema.safeParse(validRun).success).toBe(true)
+  })
+
+  it.each(['2026-09-08T07:00:00+09:00', '2026-09-07T22:00:00'])('정기 슬롯의 비 UTC 시각 %s를 거부한다', (scheduled_at) => {
+    expect(collectorRunSchema.safeParse({ ...validRun, scheduled_at }).success).toBe(false)
+  })
+
   it.each(['scheduled', 'manual', 'backfill'] as const)(
     '실행 종류 %s를 허용한다',
     (kind) => {

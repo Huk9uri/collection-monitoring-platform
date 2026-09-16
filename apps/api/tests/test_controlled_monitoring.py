@@ -9,8 +9,8 @@ from test_monitoring_policy import NOW, PolicyAdapter, make_run, configured_poli
 from test_naver_review_adapter import Repository, RUN, OTHER
 
 
-def service_with(policy):
-    run = make_run(MonitoringStatus.SUCCESS)
+def service_with(policy, status=MonitoringStatus.SUCCESS):
+    run = make_run(status)
     adapter = PolicyAdapter(latest=run, latest_data_at=NOW - timedelta(days=3))
     service = MonitoringService([adapter], policies={'policy': configured_policy()}, clock=lambda: NOW)
     service.policy_service = Mock()
@@ -59,7 +59,7 @@ def review_service(repository, *, now=datetime(2026, 9, 16, 0, tzinfo=UTC), **ov
 
     saved = MonitoringPolicy(timezone_name='Asia/Seoul', start_grace_minutes=30,
         schedule_attribution_window_minutes=360, max_duration_minutes=60,
-        schedules=[{'weekday_number': day, 'scheduled_time': '07:00'} for day in range(1, 8)],
+        schedules=overrides.pop('schedules', [{'weekday_number': day, 'scheduled_time': '07:00'} for day in range(1, 8)]),
         **overrides)
     service = MonitoringService([NaverReviewAdapter(repository, review_kind='visitor')],
         clock=lambda: now, runner=InlineRunner())
@@ -127,3 +127,50 @@ def test_before_grace_keeps_previous_scheduled_status(review_repo):
         CompletedAt='2026-09-14 22:10:00')
     summary = review_service(review_repo, now=datetime(2026, 9, 15, 22, 29, tzinfo=UTC)).collectors().items[0]
     assert summary.status == MonitoringStatus.SUCCESS
+
+
+@pytest.mark.parametrize('status', ['RUNNING', 'SUCCESS', 'SUCCESS_EMPTY'])
+def test_disabled_review_policy_keeps_stored_status_and_skips_freshness(review_repo, status):
+    review_repo.run(Status=status, CompletedAt=None if status == 'RUNNING' else '2026-09-15 22:10:00')
+    review_repo.db.execute("INSERT INTO dbo.naver_review_visitor VALUES ('2026-09-01')")
+    service = review_service(review_repo, monitoring_enabled=False, freshness={'visitor-reviews': 1})
+    summary = service.collectors().items[0]
+    assert summary.status == status
+    assert summary.latest_run.status == status
+    assert summary.latest_run.source_count == 3
+    assert not summary.freshness_overdue
+    assert not service.freshness().items[0].freshness_overdue
+    assert summary.latest_data_at == datetime(2026, 8, 31, 15, tzinfo=UTC)
+
+
+@pytest.mark.parametrize('status', [MonitoringStatus.RUNNING, MonitoringStatus.SUCCESS, MonitoringStatus.SUCCESS_EMPTY])
+def test_disabled_legacy_policy_skips_duration_and_freshness(status):
+    service, stored = service_with(policy(monitoring_enabled=False, max_duration_minutes=1,
+        freshness={'orders': 1}), status)
+    summary = service.collectors().items[0]
+    assert summary.status == stored.status
+    assert summary.latest_run == stored
+    assert not summary.freshness_overdue
+    assert not service.freshness().items[0].freshness_overdue
+
+
+@pytest.mark.parametrize('scheduled_at,expected', [
+    ('2026-09-15 22:00:00', MonitoringStatus.NOT_RUN),
+    ('2026-09-15 23:00:00', MonitoringStatus.SUCCESS),
+])
+def test_review_declared_slot_not_actual_start_decides_multi_slot_attribution(review_repo, scheduled_at, expected):
+    # 07:00 회차가 08:05에 지연 시작해도 08:00 회차를 대신하지 않는다.
+    review_repo.run(ScheduledAt=scheduled_at, StartedAt='2026-09-15 23:05:00',
+        CompletedAt='2026-09-15 23:10:00')
+    service = review_service(review_repo, schedules=[
+        {'weekday_number': 3, 'scheduled_time': '07:00'},
+        {'weekday_number': 3, 'scheduled_time': '08:00'},
+    ])
+    assert service.collectors().items[0].status == expected
+
+
+def test_legacy_scheduled_run_without_declared_timestamp_keeps_start_time_attribution():
+    service, run = service_with(policy())
+    run.execution_kind = 'scheduled'
+    assert run.scheduled_at is None
+    assert service.collectors().items[0].status == MonitoringStatus.SUCCESS

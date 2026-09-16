@@ -138,13 +138,14 @@ class NaverReviewAdapter:
     ) -> CollectorRun:
         started = as_utc(row["started_at"])
         completed = as_utc(row.get("completed_at"))
-        scheduled = as_utc(row.get("scheduled_at")) or started
+        scheduled = as_utc(row.get("scheduled_at"))
         status = _status(row["raw_status"])
         # RUN은 수집기가 PlaceId별 최종 AttemptNo로 확정한 집계다.
         # 재시도 성공은 SUCCESS이며 다른 수집기의 WARNING 승격 규칙을 적용하지 않는다.
         return CollectorRun(
             collector_id=self.collector_id, run_id=row["run_id"],
-            scheduled_date=scheduled.astimezone(_KST).date(),
+            scheduled_date=(scheduled or started).astimezone(_KST).date(),
+            scheduled_at=scheduled,
             started_at=started, completed_at=completed, status=status,
             raw_status=status.value, execution_kind=row["execution_kind"],
             target_kind=row["target_kind"], target_date_from=row.get("target_date_from"),
