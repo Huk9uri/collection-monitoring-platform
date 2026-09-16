@@ -66,6 +66,7 @@ class CollectorRun(BaseModel):
     target_date_from: date | None = None
     target_date_to: date | None = None
     target_place_id: str | None = None
+    target_store_count: int | None = Field(default=None, ge=0)
     review_count: int | None = None
     failure_count: int | None = None
     applied_count: int | None = None

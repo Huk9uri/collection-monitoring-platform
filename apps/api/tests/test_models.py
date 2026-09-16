@@ -70,6 +70,17 @@ def test_existing_collectors_accept_no_target_kind() -> None:
     assert make_run(collector_id="fcdaum").target_kind is None
 
 
+def test_target_store_count_is_optional_nullable_snake_case_contract() -> None:
+    assert make_run(collector_id="fcdaum").model_dump(mode="json")["target_store_count"] is None
+    for value in (None, 0, 7):
+        assert make_run(target_store_count=value).model_dump(mode="json")["target_store_count"] == value
+
+
+def test_target_store_count_rejects_negative_counts() -> None:
+    with pytest.raises(ValidationError):
+        make_run(target_store_count=-1)
+
+
 def test_declared_slot_is_optional_nullable_and_serialized_as_utc():
     assert make_run().model_dump()['scheduled_at'] is None
     assert make_run(scheduled_at=None).model_dump()['scheduled_at'] is None

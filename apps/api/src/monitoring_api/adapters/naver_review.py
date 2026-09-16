@@ -22,8 +22,6 @@ class QueryRepository(Protocol):
         self, sql: str, parameters: tuple[object, ...] = ()
     ) -> list[dict[str, object]]: ...
 
-    def ping(self) -> bool: ...
-
 
 _KST = ZoneInfo("Asia/Seoul")
 _ERRORS = {
@@ -37,7 +35,8 @@ _COLUMNS = """
     Status AS raw_status, SuccessfulStoreCount AS successful_units,
     FailedStoreCount AS failed_units, SourceCount AS source_count,
     InsertedCount AS inserted_count, TargetDateFrom AS target_date_from,
-    TargetDateTo AS target_date_to, TargetPlaceId AS target_place_id
+    TargetDateTo AS target_date_to, TargetPlaceId AS target_place_id,
+    TargetStoreCount AS target_store_count
 """
 _FILTER = """ReviewKind = ?
     AND (? IS NULL OR StartedAt >= ?)
@@ -72,21 +71,29 @@ ORDER BY CompletedAt DESC, CONVERT(char(36), RunId) DESC"""
 RUN_SQL = f"""SELECT {_COLUMNS} FROM dbo.NAVER_REVIEW_COLLECTION_RUN
 WHERE ReviewKind = ? AND RunId = ?"""
 
-ATTEMPTS_SQL = """SELECT
+_ATTEMPT_COLUMNS = """
     attempt.PlaceId AS unit_id,
     CONCAT(attempt.BrandName, ' / ', attempt.StoreName) AS unit_name,
     attempt.AttemptNo AS attempt_no, attempt.StartedAt AS started_at,
     attempt.CompletedAt AS completed_at, attempt.Status AS raw_status,
     attempt.SourceCount AS source_count, attempt.InsertedCount AS inserted_count,
     attempt.Committed AS committed, attempt.ErrorCategory AS error_category
+"""
+
+ATTEMPTS_SQL = f"""SELECT {_ATTEMPT_COLUMNS}
 FROM dbo.NAVER_REVIEW_COLLECTION_ATTEMPT AS attempt
 INNER JOIN dbo.NAVER_REVIEW_COLLECTION_RUN AS run ON run.RunId = attempt.RunId
 WHERE run.ReviewKind = ? AND run.RunId = ?
-    AND attempt.AttemptNo = (
-        SELECT MAX(final.AttemptNo) FROM dbo.NAVER_REVIEW_COLLECTION_ATTEMPT AS final
-        WHERE final.RunId = attempt.RunId AND final.PlaceId = attempt.PlaceId
-    )
-ORDER BY attempt.PlaceId"""
+ORDER BY attempt.PlaceId, attempt.AttemptNo"""
+
+READINESS_RUN_SQL = f"""SELECT ReviewKind, {_COLUMNS}
+FROM dbo.NAVER_REVIEW_COLLECTION_RUN WHERE 1 = 0"""
+READINESS_ATTEMPTS_SQL = f"""SELECT attempt.RunId, {_ATTEMPT_COLUMNS}
+FROM dbo.NAVER_REVIEW_COLLECTION_ATTEMPT AS attempt WHERE 1 = 0"""
+READINESS_BUSINESS_SQL = {
+    "visitor": "SELECT review.[date] FROM dbo.naver_review_visitor AS review WHERE 1 = 0",
+    "blog": "SELECT review.[date] FROM dbo.naver_review_blog AS review WHERE 1 = 0",
+}
 
 # 외부 입력으로 테이블명을 조립하지 않는다. 업무 테이블은 날짜 정밀도다.
 FRESHNESS_SQL = {
@@ -150,6 +157,7 @@ class NaverReviewAdapter:
             raw_status=status.value, execution_kind=row["execution_kind"],
             target_kind=row["target_kind"], target_date_from=row.get("target_date_from"),
             target_date_to=row.get("target_date_to"), target_place_id=row.get("target_place_id"),
+            target_store_count=row.get("target_store_count"),
             successful_units=row["successful_units"], failed_units=row["failed_units"],
             source_count=row.get("source_count"), inserted_count=row.get("inserted_count"),
             changed_count=None, unchanged_count=None,
@@ -230,4 +238,12 @@ class NaverReviewAdapter:
         )]
 
     def readiness(self) -> bool:
-        return self._repository.ping()
+        # 행은 읽지 않지만 각 필수 테이블·열의 존재와 SELECT 권한을 검증한다.
+        # 조회 예외는 공통 서비스에서 SOURCE_UNAVAILABLE/ready=False로 정규화한다.
+        for sql in (
+            READINESS_RUN_SQL,
+            READINESS_ATTEMPTS_SQL,
+            READINESS_BUSINESS_SQL[self.review_kind],
+        ):
+            self._repository.fetch_all(sql)
+        return True

@@ -24,7 +24,7 @@ class Repository:
 
     def __init__(self):
         self.calls = []
-        self.db = sqlite3.connect(":memory:")
+        self.db = sqlite3.connect(":memory:", check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.execute("ATTACH DATABASE ':memory:' AS dbo")
         self.db.executescript("""
@@ -168,16 +168,24 @@ def test_single_store_target_and_manual_local_day_are_preserved(repo):
     assert run.scheduled_date == date(2026, 9, 16)
 
 
-def test_detail_selects_final_attempt_per_place_without_retry_warning(repo):
+def test_detail_preserves_all_attempts_without_changing_final_run_metrics(repo):
     repo.run(SourceCount=3, InsertedCount=2)
     repo.attempt(Status="FAILED", SourceCount=9, InsertedCount=0,
                  Committed=0, ErrorCategory="PAGE_LOAD_FAILED")
     repo.attempt(AttemptNo=2)
-    run = NaverReviewAdapter(repo, review_kind="visitor").get_run(RUN)
+    adapter = NaverReviewAdapter(repo, review_kind="visitor")
+    run = adapter.get_run(RUN)
     assert run.status == MonitoringStatus.SUCCESS
     assert (run.source_count, run.inserted_count) == (3, 2)
-    assert len(run.attempts) == 1
-    attempt = run.attempts[0]
+    assert [(item.attempt_no, item.outcome) for item in run.attempts] == [
+        (1, MonitoringStatus.FAILED), (2, MonitoringStatus.SUCCESS),
+    ]
+    assert run.attempts[0].error_category == "PAGE_LOAD_FAILED"
+    assert adapter.latest().source_count == 3
+    assert adapter.count_runs_by_status(started_from=START, started_to=END) == {
+        MonitoringStatus.SUCCESS: 1,
+    }
+    attempt = run.attempts[1]
     assert (attempt.unit_id, attempt.attempt_no, attempt.source_count) == ("123", 2, 3)
     assert "테스트점" in attempt.unit_name
     assert attempt.committed is True and attempt.error_category is None
@@ -290,3 +298,80 @@ def test_unapproved_error_category_cannot_leak_from_detail(repo):
     repo.attempt(ErrorCategory="password=secret")
     with pytest.raises(ValueError, match="오류 분류"):
         NaverReviewAdapter(repo, review_kind="visitor").get_run(RUN)
+
+
+@pytest.mark.parametrize("kind", ["visitor", "blog"])
+@pytest.mark.parametrize("table", ["NAVER_REVIEW_COLLECTION_RUN", "NAVER_REVIEW_COLLECTION_ATTEMPT"])
+def test_readiness_rejects_missing_audit_tables(repo, kind, table):
+    repo.db.execute(f"DROP TABLE dbo.{table}")
+    with pytest.raises(sqlite3.OperationalError):
+        NaverReviewAdapter(repo, review_kind=kind).readiness()
+
+
+@pytest.mark.parametrize("kind", ["visitor", "blog"])
+@pytest.mark.parametrize("table,column", [
+    ("NAVER_REVIEW_COLLECTION_RUN", "TargetStoreCount"),
+    ("NAVER_REVIEW_COLLECTION_RUN", "ReviewKind"),
+    ("NAVER_REVIEW_COLLECTION_RUN", "ScheduledAt"),
+    ("NAVER_REVIEW_COLLECTION_ATTEMPT", "RunId"),
+    ("NAVER_REVIEW_COLLECTION_ATTEMPT", "AttemptNo"),
+    ("NAVER_REVIEW_COLLECTION_ATTEMPT", "ErrorCategory"),
+])
+def test_readiness_rejects_missing_audit_columns(repo, kind, table, column):
+    repo.db.execute(f"ALTER TABLE dbo.{table} RENAME COLUMN {column} TO missing_column")
+    with pytest.raises(sqlite3.OperationalError):
+        NaverReviewAdapter(repo, review_kind=kind).readiness()
+
+
+@pytest.mark.parametrize("kind,other", [("visitor", "blog"), ("blog", "visitor")])
+@pytest.mark.parametrize("missing", ["table", "column"])
+def test_readiness_checks_only_the_matching_business_table(repo, kind, other, missing):
+    if missing == "table":
+        repo.db.execute(f"DROP TABLE dbo.naver_review_{kind}")
+    else:
+        repo.db.execute(f"ALTER TABLE dbo.naver_review_{kind} RENAME COLUMN date TO missing_date")
+    assert NaverReviewAdapter(repo, review_kind=other).readiness() is True
+    with pytest.raises(sqlite3.OperationalError):
+        NaverReviewAdapter(repo, review_kind=kind).readiness()
+
+
+def test_readiness_permission_error_is_sanitized_by_service(repo):
+    from monitoring_api.services.monitoring import MonitoringService
+
+    def deny_attempt_read(action, table, *args):
+        if action == sqlite3.SQLITE_READ and table == "NAVER_REVIEW_COLLECTION_ATTEMPT":
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+
+    repo.db.set_authorizer(deny_attempt_read)
+    result = MonitoringService([NaverReviewAdapter(repo, review_kind="visitor")]).readiness()
+    assert result.items[0].ready is False
+    assert result.errors[0].code == "SOURCE_UNAVAILABLE"
+    assert "NAVER_REVIEW_COLLECTION_ATTEMPT" not in result.model_dump_json()
+
+
+@pytest.mark.parametrize("target_count", [None, 0, 7])
+def test_target_count_is_preserved_in_all_run_views(repo, target_count):
+    repo.run(TargetStoreCount=target_count)
+    adapter = NaverReviewAdapter(repo, review_kind="visitor")
+    for run in [adapter.latest(), adapter.list_runs()[0], adapter.get_run(RUN)]:
+        assert run.model_dump(mode="json")["target_store_count"] == target_count
+
+
+def test_http_detail_exposes_target_count_and_full_retry_history(repo):
+    from fastapi.testclient import TestClient
+    from auth_helpers import create_admin_app
+    from monitoring_api.config import Settings
+    from monitoring_api.services.monitoring import MonitoringService
+
+    repo.run(TargetStoreCount=7)
+    repo.attempt(Status="FAILED", Committed=0, ErrorCategory="PAGE_LOAD_FAILED")
+    repo.attempt(AttemptNo=2)
+    service = MonitoringService([NaverReviewAdapter(repo, review_kind="visitor")])
+    with TestClient(create_admin_app(Settings(_env_file=None), monitoring_service=service)) as client:
+        response = client.get(f"/api/v1/monitoring/runs/naver-review-visitor/{RUN}")
+    assert response.status_code == 200
+    run = response.json()["items"][0]
+    assert run["target_store_count"] == 7
+    assert "TargetStoreCount" not in run
+    assert [item["attempt_no"] for item in run["attempts"]] == [1, 2]
