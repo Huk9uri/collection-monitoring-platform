@@ -133,16 +133,13 @@ export function RunDetailDropdown({
               <h3 id="attempts-title" className="font-semibold">
                 하위 작업 시도
               </h3>
-              {run.attempts.some((attempt) => attempt.timing_basis === 'parent-window') && <p className="text-sm text-muted-foreground">예약 실행 관측 구간은 자식 실행의 시각 근거가 없는 과거 기록에 사용하며, 정확한 단계 소요시간이 아닙니다.</p>}
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>{isReview ? '매장' : '작업'}</TableHead>
                     <TableHead>시도</TableHead>
                     <TableHead>단계</TableHead>
-                    <TableHead>시각 근거</TableHead>
                     <TableHead>하위 실행 ID</TableHead>
-                    <TableHead>매장 코드</TableHead>
                     <TableHead>DB 반영</TableHead>
                     <TableHead>결과</TableHead>
                     <TableHead>{isReview ? '확인' : '원천'}</TableHead>
@@ -163,9 +160,7 @@ export function RunDetailDropdown({
                         </TableCell>
                         <TableCell>{attempt.attempt_no}</TableCell>
                         <TableCell>{attempt.stage === 'dry-run' ? 'dry-run (예상)' : attempt.stage ?? '-'}</TableCell>
-                        <TableCell>{attempt.timing_basis === 'parent-window' ? '예약 실행 관측 구간' : attempt.timing_basis === 'worker-report' ? '자식 실행 보고 시각' : '-'}</TableCell>
                         <TableCell className="break-all">{attempt.child_run_id ?? '-'}</TableCell>
-                        <TableCell>{attempt.store_codes?.join(', ') || '-'}</TableCell>
                         <TableCell>{attempt.committed === null ? '-' : attempt.committed ? (run.collector_id === 'naver-store-hours' ? '반영 확인' : '반영 완료') : '미반영'}</TableCell>
                         <TableCell>
                           <Badge variant={outcome.variant}>{outcome.label}</Badge>

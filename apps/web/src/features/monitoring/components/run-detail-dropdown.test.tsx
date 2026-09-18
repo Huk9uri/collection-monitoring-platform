@@ -210,6 +210,18 @@ const smartPlaceRun: CollectorRun = {
 }
 
 describe('RunDetailDropdown', () => {
+  it('하위 작업 시도에서 매장 코드를 표시하지 않는다', () => {
+    const run = {
+      ...partialFailedRun,
+      attempts: [{ ...partialFailedRun.attempts[0]!, store_codes: ['STORE-001'] }],
+    }
+
+    render(<RunDetailDropdown run={run} isLoading={false} />)
+
+    expect(screen.queryByRole('columnheader', { name: '매장 코드' })).toBeNull()
+    expect(screen.queryByText('STORE-001')).toBeNull()
+  })
+
   it('부분 실패를 장애로 표시하고 성공·실패 하위 작업을 구분한다', () => {
     render(
       <RunDetailDropdown
@@ -301,7 +313,7 @@ it('네이버 사전 점검의 품질과 원시 결과 및 미확정 적용 집�
   expect(screen.getByText('dry-run (예상)')).toBeTruthy()
 })
 
-it('부분 실패의 반영 확인과 예약 관측 구간을 완료나 정확한 단계 소요시간으로 표시하지 않는다', () => {
+it('부분 실패의 반영 확인을 표시하고 시각 근거는 표시하지 않는다', () => {
   const run = { ...partialFailedRun, collector_id: 'naver-store-hours', committed: true, applied_count: 2,
     attempts: [{ ...partialFailedRun.attempts[0]!, timing_basis: 'parent-window' as const },
       { ...partialFailedRun.attempts[1]!, timing_basis: 'worker-report' as const },
@@ -310,10 +322,8 @@ it('부분 실패의 반영 확인과 예약 관측 구간을 완료나 정확�
   render(<RunDetailDropdown run={run} isLoading={false} />)
   expect(screen.getAllByText('반영 확인')).toHaveLength(2)
   expect(screen.queryByText('반영 완료')).toBeNull()
-  expect(screen.getByText('예약 실행 관측 구간')).toBeTruthy()
-  expect(screen.getByText('자식 실행 보고 시각')).toBeTruthy()
-  expect(screen.getByText(/정확한 단계 소요시간이 아닙니다/)).toBeTruthy()
-  const running = screen.getByText('진행 작업').closest('tr')!
-  const timingColumn = screen.getAllByRole('columnheader').findIndex((header) => header.textContent === '시각 근거')
-  expect(running.querySelectorAll('td')[timingColumn]?.textContent).toBe('-')
+  expect(screen.queryByRole('columnheader', { name: '시각 근거' })).toBeNull()
+  expect(screen.queryByText('예약 실행 관측 구간')).toBeNull()
+  expect(screen.queryByText('자식 실행 보고 시각')).toBeNull()
+  expect(screen.queryByText(/정확한 단계 소요시간이 아닙니다/)).toBeNull()
 })
