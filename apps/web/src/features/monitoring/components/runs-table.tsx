@@ -1,4 +1,5 @@
-import { ChevronLeftIcon, ChevronRightIcon } from 'lucide-react'
+import { Fragment } from 'react'
+import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon } from 'lucide-react'
 
 import { Button } from '../../../components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '../../../components/ui/card'
@@ -11,7 +12,10 @@ import {
   TableRow,
 } from '../../../components/ui/table'
 import type { CollectorRun, MonitoringStatus } from '../data/schema'
+import { formatCount } from '../data/format-count'
 import { collectorDisplayName } from './collector-card'
+import { RunDetailDropdown } from './run-detail-dropdown'
+import { executionKindLabel, targetKindLabel } from './run-labels'
 import {
   formatSeoulDateTime,
   StatusBadge,
@@ -24,6 +28,7 @@ export const MAX_RUNS_PAGE = Math.floor(10_000 / RUNS_PAGE_SIZE) + 1
 export interface RunFilters {
   from: string
   to: string
+  brand?: string
   collector: string
   status: MonitoringStatus | ''
 }
@@ -43,6 +48,11 @@ interface RunsTableProps {
   onFiltersChange: (filters: RunFilters) => void
   onPageChange: (page: number) => void
   onSelectRun: (run: CollectorRun) => void
+  selectedCollectorId?: string
+  selectedRunId?: string
+  detailRun?: CollectorRun
+  isDetailLoading?: boolean
+  detailError?: unknown
 }
 
 const statuses = Object.entries(statusPresentation) as [
@@ -63,6 +73,11 @@ export function RunsTable({
   onFiltersChange,
   onPageChange,
   onSelectRun,
+  selectedCollectorId,
+  selectedRunId,
+  detailRun,
+  isDetailLoading = false,
+  detailError,
 }: RunsTableProps) {
   const totalPages = Math.min(
     MAX_RUNS_PAGE,
@@ -83,7 +98,7 @@ export function RunsTable({
               서버에서 기간과 수집기별 실행을 페이지 단위로 조회합니다.
             </p>
           </div>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" role="group" aria-label="실행 이력 필터">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5" role="group" aria-label="실행 이력 필터">
             <label className="grid gap-1 text-xs font-medium text-muted-foreground">
               조회 시작일
               <input
@@ -134,6 +149,15 @@ export function RunsTable({
               </select>
             </label>
             <label className="grid gap-1 text-xs font-medium text-muted-foreground">
+              브랜드 필터
+              <select className={fieldClassName} value={filters.brand ?? ''}
+                onChange={(event) => updateFilter('brand', event.target.value)}>
+                <option value="">전체 브랜드</option>
+                <option value="hanchon">한촌설렁탕</option>
+                <option value="yuksoodang">육수당</option>
+              </select>
+            </label>
+            <label className="grid gap-1 text-xs font-medium text-muted-foreground">
               상태 필터
               <select
                 className={fieldClassName}
@@ -158,6 +182,9 @@ export function RunsTable({
               <TableRow>
                 <TableHead>실행 ID</TableHead>
                 <TableHead>수집기</TableHead>
+                <TableHead>브랜드</TableHead>
+                <TableHead>실행 유형</TableHead>
+                <TableHead>대상 유형</TableHead>
                 <TableHead>상태</TableHead>
                 <TableHead>시작</TableHead>
                 <TableHead>원천</TableHead>
@@ -169,34 +196,64 @@ export function RunsTable({
             <TableBody>
               {runs.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
+                  <TableCell colSpan={11} className="h-24 text-center text-muted-foreground">
                     선택한 조건의 실행 이력이 없습니다.
                   </TableCell>
                 </TableRow>
               ) : (
-                runs.map((run) => (
-                  <TableRow key={`${run.collector_id}:${run.run_id}`}>
+                runs.map((run) => {
+                  const isExpanded =
+                    selectedCollectorId === run.collector_id &&
+                    selectedRunId === run.run_id
+                  const detailId = `run-detail-${run.collector_id}-${run.run_id}`
+
+                  return (
+                    <Fragment key={`${run.collector_id}:${run.run_id}`}>
+                      <TableRow data-state={isExpanded ? 'selected' : undefined}>
                     <TableCell>
                       <button
                         type="button"
                         className="font-medium text-primary underline-offset-4 hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         aria-label={`실행 ${run.run_id} 상세 보기`}
+                        aria-expanded={isExpanded}
+                        aria-controls={detailId}
                         onClick={() => onSelectRun(run)}
                       >
                         {run.run_id}
+                        <ChevronDownIcon
+                          aria-hidden="true"
+                          className={`ml-1 inline size-4 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                        />
                       </button>
                     </TableCell>
                     <TableCell>{collectorDisplayName(run.collector_id)}</TableCell>
+                    <TableCell>{run.scope_name ?? '-'}</TableCell>
+                    <TableCell>{executionKindLabel(run.execution_kind)}</TableCell>
+                    <TableCell>{targetKindLabel(run.target_kind)}</TableCell>
                     <TableCell>
                       <StatusBadge status={run.status} />
                     </TableCell>
                     <TableCell>{formatSeoulDateTime(run.started_at)}</TableCell>
-                    <TableCell>{run.source_count.toLocaleString('ko-KR')}</TableCell>
-                    <TableCell>{run.inserted_count.toLocaleString('ko-KR')}</TableCell>
-                    <TableCell>{run.changed_count.toLocaleString('ko-KR')}</TableCell>
+                    <TableCell>{formatCount(run.source_count)}</TableCell>
+                    <TableCell>{formatCount(run.inserted_count)}</TableCell>
+                    <TableCell>{formatCount(run.changed_count)}</TableCell>
                     <TableCell>{run.failed_units.toLocaleString('ko-KR')}</TableCell>
-                  </TableRow>
-                ))
+                      </TableRow>
+                      {isExpanded ? (
+                        <TableRow className="bg-muted/20 hover:bg-muted/20">
+                          <TableCell colSpan={11} className="whitespace-normal p-3 sm:p-4">
+                            <RunDetailDropdown
+                              id={detailId}
+                              run={detailRun}
+                              isLoading={isDetailLoading}
+                              error={detailError}
+                            />
+                          </TableCell>
+                        </TableRow>
+                      ) : null}
+                    </Fragment>
+                  )
+                })
               )}
             </TableBody>
           </Table>

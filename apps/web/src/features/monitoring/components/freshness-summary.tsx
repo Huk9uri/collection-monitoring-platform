@@ -8,6 +8,7 @@ import {
   TableHeader,
   TableRow,
 } from '../../../components/ui/table'
+import { formatCount } from '../data/format-count'
 import type { FreshnessRecord } from '../data/schema'
 import { collectorDisplayName } from './collector-card'
 import { formatSeoulDateTime } from './monitoring-state'
@@ -28,6 +29,7 @@ export function FreshnessSummary({ items }: { items: FreshnessRecord[] }) {
               <TableRow>
                 <TableHead>수집기</TableHead>
                 <TableHead>데이터셋</TableHead>
+                <TableHead>확인 / 대상 매장</TableHead>
                 <TableHead>마지막 성공 확인</TableHead>
                 <TableHead>최신 데이터 시각</TableHead>
                 <TableHead>신선도 SLA</TableHead>
@@ -36,7 +38,7 @@ export function FreshnessSummary({ items }: { items: FreshnessRecord[] }) {
             <TableBody>
               {items.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
+                  <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
                     신선도 정보가 없습니다.
                   </TableCell>
                 </TableRow>
@@ -46,7 +48,8 @@ export function FreshnessSummary({ items }: { items: FreshnessRecord[] }) {
                     <TableCell className="font-medium">
                       {collectorDisplayName(item.collector_id)}
                     </TableCell>
-                    <TableCell>{item.dataset_id}</TableCell>
+                    <TableCell>{item.scope_name ?? item.dataset_id}</TableCell>
+                    <TableCell>{formatCount(item.coverage_count ?? null)} / {formatCount(item.source_count ?? null)}</TableCell>
                     <TableCell>
                       {item.last_successful_check_at === null
                         ? '성공 확인 없음'
@@ -54,7 +57,7 @@ export function FreshnessSummary({ items }: { items: FreshnessRecord[] }) {
                     </TableCell>
                     <TableCell>
                       {item.latest_data_at === null
-                        ? '수집 이력 없음'
+                        ? (item.collector_id === 'naver-store-hours' ? '업무 시각 미확인' : '수집 이력 없음')
                         : formatSeoulDateTime(item.latest_data_at)}
                     </TableCell>
                     <TableCell>

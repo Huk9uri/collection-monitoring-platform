@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
-from typing import Protocol
+from typing import Literal, Protocol, Self
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from monitoring_api.models import MonitoringStatus
 
@@ -15,6 +15,10 @@ from monitoring_api.models import MonitoringStatus
 class CollectorAttempt(BaseModel):
     """한 브랜드 또는 채널의 단일 수집 시도다."""
 
+    timing_basis: Literal["worker-report", "parent-window"] | None = None
+    child_run_id: UUID | None = None
+    stage: Literal["dry-run", "apply"] | None = None
+    store_codes: list[str] | None = None
     unit_id: str
     unit_name: str
     attempt_no: int
@@ -22,10 +26,10 @@ class CollectorAttempt(BaseModel):
     completed_at: datetime | None
     raw_status: str
     outcome: MonitoringStatus
-    source_count: int
-    inserted_count: int
-    changed_count: int
-    unchanged_count: int
+    source_count: int | None
+    inserted_count: int | None
+    changed_count: int | None
+    unchanged_count: int | None
     committed: bool | None = None
     error_category: str | None = None
 
@@ -41,21 +45,75 @@ class CollectorRun(BaseModel):
     collector_id: str
     run_id: UUID
     scheduled_date: date
+    scheduled_at: datetime | None = None
     started_at: datetime
     completed_at: datetime | None
     status: MonitoringStatus
     successful_units: int
     failed_units: int
-    source_count: int
-    inserted_count: int
-    changed_count: int
-    unchanged_count: int
+    source_count: int | None
+    inserted_count: int | None
+    changed_count: int | None
+    unchanged_count: int | None
+    scope_id: str | None = None
+    scope_name: str | None = None
+    parent_run_id: UUID | None = None
+    raw_status: str | None = None
+    execution_kind: (
+        Literal["scheduled", "manual", "backfill", "preflight-only"] | None
+    ) = None
+    target_kind: Literal["all-stores", "single-store", "date-range"] | None = None
+    target_date_from: date | None = None
+    target_date_to: date | None = None
+    target_place_id: str | None = None
+    target_store_count: int | None = Field(default=None, ge=0)
+    review_count: int | None = None
+    failure_count: int | None = None
+    applied_count: int | None = None
+    coverage_count: int | None = None
+    committed: bool | None = None
+    successful_check_at: datetime | None = None
+    error_category: str | None = None
     attempts: list[CollectorAttempt] = Field(default_factory=list)
 
-    @field_validator("started_at", "completed_at")
+    @field_validator("started_at", "completed_at", "scheduled_at")
     @classmethod
     def require_utc(cls, value: datetime | None) -> datetime | None:
         return require_utc_datetime(value)
+
+    @model_validator(mode="after")
+    def validate_target(self) -> Self:
+        """리뷰 실행의 대상 종류와 대상 메타데이터 조합을 제한한다."""
+
+        if self.target_kind is None:
+            return self
+
+        if self.target_kind == "all-stores":
+            if any(
+                value is not None
+                for value in (
+                    self.target_place_id,
+                    self.target_date_from,
+                    self.target_date_to,
+                )
+            ):
+                raise ValueError("전체 매장 실행에는 대상 ID나 날짜를 지정할 수 없습니다.")
+            return self
+
+        if self.target_kind == "single-store":
+            if not self.target_place_id or not self.target_place_id.strip():
+                raise ValueError("단일 매장 실행에는 비어 있지 않은 대상 place ID가 필요합니다.")
+            if self.target_date_from is not None or self.target_date_to is not None:
+                raise ValueError("단일 매장 실행에는 대상 날짜를 지정할 수 없습니다.")
+            return self
+
+        if self.target_date_from is None or self.target_date_to is None:
+            raise ValueError("기간 실행에는 시작일과 종료일이 모두 필요합니다.")
+        if self.target_date_from > self.target_date_to:
+            raise ValueError("기간 실행의 종료일은 시작일보다 빠를 수 없습니다.")
+        if self.target_place_id is not None:
+            raise ValueError("기간 실행에는 대상 place ID를 지정할 수 없습니다.")
+        return self
 
 
 class FreshnessRecord(BaseModel):
@@ -65,6 +123,10 @@ class FreshnessRecord(BaseModel):
     dataset_id: str
     last_successful_check_at: datetime | None = None
     latest_data_at: datetime | None
+    scope_id: str | None = None
+    scope_name: str | None = None
+    coverage_count: int | None = None
+    source_count: int | None = None
     freshness_sla_minutes: int | None = None
     freshness_overdue: bool = False
 
@@ -159,6 +221,7 @@ def map_raw_status(raw_status: str) -> MonitoringStatus:
         "SUCCESS_EMPTY": MonitoringStatus.SUCCESS_EMPTY,
         "WARNING": MonitoringStatus.WARNING,
         "PARTIAL": MonitoringStatus.PARTIAL_FAILED,
+        "PARTIAL_FAILURE": MonitoringStatus.PARTIAL_FAILED,
         "PARTIAL_FAILED": MonitoringStatus.PARTIAL_FAILED,
         "FAILED": MonitoringStatus.FAILED,
         "RUNNING": MonitoringStatus.RUNNING,
@@ -169,7 +232,7 @@ def map_raw_status(raw_status: str) -> MonitoringStatus:
 
 
 def attempt_outcome(
-    raw_status: str, *, source_count: int, committed: bool | None
+    raw_status: str, *, source_count: int | None, committed: bool | None
 ) -> MonitoringStatus:
     """원시 시도 상태와 확인 가능한 commit 사실을 canonical 결과로 바꾼다."""
 
@@ -241,7 +304,7 @@ def derive_run_status(
 def attempt_from_row(row: Mapping[str, object]) -> CollectorAttempt:
     """고정 SQL의 별칭 행을 공통 시도 모델로 변환한다."""
 
-    source_count = int(row.get("source_count") or 0)
+    source_count = _nullable_int(row, "source_count")
     committed = None if row.get("committed") is None else bool(row["committed"])
     raw_status = str(row["raw_status"])
     return CollectorAttempt(
@@ -257,9 +320,9 @@ def attempt_from_row(row: Mapping[str, object]) -> CollectorAttempt:
             committed=committed,
         ),
         source_count=source_count,
-        inserted_count=int(row.get("inserted_count") or 0),
-        changed_count=int(row.get("changed_count") or 0),
-        unchanged_count=int(row.get("unchanged_count") or 0),
+        inserted_count=_nullable_int(row, "inserted_count"),
+        changed_count=_nullable_int(row, "changed_count"),
+        unchanged_count=_nullable_int(row, "unchanged_count"),
         committed=committed,
         error_category=(
             None if row.get("error_category") is None else str(row["error_category"])
@@ -300,12 +363,34 @@ def run_from_row(
         status=derive_run_status(attempts, raw_status=str(row["raw_status"])),
         successful_units=successful_units,
         failed_units=failed_units,
-        source_count=sum(attempt.source_count for attempt in selected),
-        inserted_count=sum(attempt.inserted_count for attempt in selected),
-        changed_count=sum(attempt.changed_count for attempt in selected),
-        unchanged_count=sum(attempt.unchanged_count for attempt in selected),
+        source_count=_confirmed_total([attempt.source_count for attempt in selected]),
+        inserted_count=_confirmed_total(
+            [attempt.inserted_count for attempt in selected]
+        ),
+        changed_count=_confirmed_total([attempt.changed_count for attempt in selected]),
+        unchanged_count=_confirmed_total(
+            [attempt.unchanged_count for attempt in selected]
+        ),
+        scope_id=_nullable_string(row, "scope_id"),
+        scope_name=_nullable_string(row, "scope_name"),
         attempts=attempts,
     )
+
+
+def _nullable_int(row: Mapping[str, object], key: str) -> int | None:
+    value = row.get(key)
+    return None if value is None else int(value)
+
+
+def _nullable_string(row: Mapping[str, object], key: str) -> str | None:
+    value = row.get(key)
+    return None if value is None else str(value)
+
+
+def _confirmed_total(values: list[int | None]) -> int | None:
+    if not values or any(value is None for value in values):
+        return None
+    return sum(value for value in values if value is not None)
 
 
 def freshness_from_rows(

@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from monitoring_api.adapters.base import CollectorRun, FreshnessRecord
 from monitoring_api.auth import CurrentUser, get_current_user
 from monitoring_api.main import create_app
+from monitoring_api.config import Settings
 from monitoring_api.models import MonitoringStatus
 from monitoring_api.services.monitoring import MonitoringService
 
@@ -159,7 +160,8 @@ def available_adapter() -> AvailableAdapter:
 @pytest.fixture(scope="module")
 def client(available_adapter: AvailableAdapter) -> Iterator[TestClient]:
     service = MonitoringService([available_adapter])
-    with TestClient(create_app(monitoring_service=service)) as test_client:
+    with TestClient(create_app(Settings(_env_file=None), monitoring_service=service)) as test_client:
+        test_client.app.dependency_overrides[get_current_user] = lambda: CurrentUser(roles={'viewer'})
         yield test_client
 
 
@@ -197,6 +199,22 @@ def test_monitoring_get_routes_expose_service_results(client: TestClient) -> Non
     assert responses["detail"].json()["items"][0]["run_id"] == str(RUN_ID)
     assert responses["freshness"].json()["items"][0]["dataset_id"] == "orders"
     assert all(response.json()["errors"] == [] for response in responses.values())
+
+
+@pytest.mark.parametrize('scheduled_at', [None, datetime(2026, 9, 7, 22, tzinfo=UTC)])
+def test_declared_slot_survives_collector_history_and_detail_responses(client, scheduled_at):
+    class ScheduledAdapter(AvailableAdapter):
+        def _run(self):
+            return CollectorRun(**{**super()._run().model_dump(), 'scheduled_at': scheduled_at})
+
+    with use_service(client, MonitoringService([ScheduledAdapter()])):
+        for path in ['/api/v1/monitoring/collectors', '/api/v1/monitoring/runs',
+                     f'/api/v1/monitoring/runs/available/{RUN_ID}']:
+            response = client.get(path)
+            assert response.status_code == 200
+            item = response.json()['items'][0]
+            run = item['latest_run'] if path.endswith('collectors') else item
+            assert run['scheduled_at'] == (None if scheduled_at is None else '2026-09-07T22:00:00Z')
 
 
 def test_runs_accepts_exact_maximum_range_and_page_size(
@@ -470,7 +488,7 @@ def test_every_monitoring_route_requires_viewer_role(client: TestClient) -> None
     try:
         responses = [client.get(path) for path in paths]
     finally:
-        client.app.dependency_overrides.pop(get_current_user)
+        client.app.dependency_overrides[get_current_user] = lambda: CurrentUser(roles={'viewer'})
 
     assert all(response.status_code == 403 for response in responses)
     assert all(

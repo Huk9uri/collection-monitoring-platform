@@ -5,13 +5,11 @@ from monitoring_api.auth import CurrentUser, get_current_user, require_role
 from monitoring_api.models import Role
 
 
-def test_anonymous_user_has_only_the_viewer_role() -> None:
-    user = get_current_user()
-
-    assert user.roles == frozenset({Role.VIEWER})
-    assert user.has_role(Role.VIEWER)
-    assert not user.has_role(Role.OPERATOR)
-    assert not user.has_role(Role.ADMIN)
+def test_anonymous_user_is_rejected() -> None:
+    from starlette.requests import Request
+    with pytest.raises(HTTPException) as error:
+        get_current_user(Request({'type': 'http', 'headers': []}))
+    assert error.value.status_code == 401
 
 
 def test_viewer_cannot_pass_operator_role_boundary() -> None:

@@ -103,6 +103,9 @@ class CollectorSummary(BaseModel):
     latest_data_at: datetime | None
     freshness_overdue: bool
     freshness: list[FreshnessRecord]
+    policy_source: str = 'env'
+    policy_warning: str | None = None
+    policy_updated_at: str | None = None
 
 
 class MonitoringSummary(BaseModel):
@@ -203,9 +206,7 @@ class BoundedParallelRunner:
             set(future_by_id.values()), timeout=timeout_seconds
         )
         results: dict[str, T] = {}
-        id_by_future = {
-            future: source_id for source_id, future in future_by_id.items()
-        }
+        id_by_future = {future: source_id for source_id, future in future_by_id.items()}
         for future in done:
             source_id = id_by_future[future]
             try:
@@ -274,6 +275,11 @@ class MonitoringService:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._source_timeout_seconds = source_timeout_seconds
         self._runner = runner or BoundedParallelRunner()
+        self.policy_service = None
+
+    @property
+    def collector_ids(self):
+        return tuple(self._adapters)
 
     def _now(self) -> datetime:
         now = require_utc_datetime(self._clock())
@@ -317,20 +323,24 @@ class MonitoringService:
         records: list[FreshnessRecord],
     ) -> list[FreshnessRecord]:
         policy = self._policies.get(adapter.collector_id, CollectorPolicy())
+        snapshot = self.policy_service.get(adapter.collector_id) if self.policy_service else None
+        dynamic_sla = snapshot['policy']['freshness'] if snapshot and snapshot['version'] and snapshot['policy'] else None
+        monitoring_enabled = snapshot['policy']['monitoring_enabled'] if dynamic_sla is not None else True
         enriched: list[FreshnessRecord] = []
         for record in records:
-            sla = policy.freshness_sla.get(record.dataset_id)
+            sla = (timedelta(minutes=dynamic_sla[record.dataset_id]) if record.dataset_id in dynamic_sla else None) if dynamic_sla is not None else policy.freshness_sla.get(record.dataset_id)
             overdue = bool(
-                sla is not None
-                and (
-                    record.latest_data_at is None
-                    or now - record.latest_data_at > sla
-                )
+                monitoring_enabled and sla is not None
+                and (record.latest_data_at is None or now - record.latest_data_at > sla)
             )
             enriched.append(
                 record.model_copy(
                     update={
-                        "last_successful_check_at": last_successful_check_at,
+                        "last_successful_check_at": (
+                            record.last_successful_check_at
+                            if record.scope_id is not None
+                            else last_successful_check_at
+                        ),
                         "freshness_sla_minutes": (
                             None if sla is None else int(sla.total_seconds() // 60)
                         ),
@@ -343,6 +353,9 @@ class MonitoringService:
     def _collector_summary(
         self, adapter: CollectorAdapter, *, now: datetime
     ) -> CollectorSummary:
+        record = self.policy_service.get(adapter.collector_id) if self.policy_service else None
+        if record and record['policy'] is not None and record['version'] is not None:
+            return self._controlled_summary(adapter, now, record)
         latest = adapter.latest()
         last_successful_check_at = adapter.latest_successful_check_at()
         freshness = self._enrich_freshness(
@@ -417,7 +430,59 @@ class MonitoringService:
             latest_data_at=latest_data_at,
             freshness_overdue=freshness_overdue,
             freshness=freshness,
+            policy_source=record['policy_source'] if record else 'env',
+            policy_warning=record['warning'] if record else None,
         )
+
+    def _controlled_summary(self, adapter, now, record):
+        from monitoring_api.services.policy import MonitoringPolicy, previous_occurrence
+        policy = MonitoringPolicy.model_validate(record['policy'])
+        controlled = getattr(adapter, 'with_monitoring_policy', lambda policy: adapter)(policy)
+        latest = controlled.latest()
+        checked = controlled.latest_successful_check_at()
+        freshness = []
+        for item in controlled.freshness():
+            sla = policy.freshness.get(item.dataset_id)
+            freshness.append(item.model_copy(update={
+                'last_successful_check_at': item.last_successful_check_at if item.scope_id is not None else checked,
+                'freshness_sla_minutes': sla,
+                'freshness_overdue': policy.monitoring_enabled and sla is not None and (item.latest_data_at is None or now - item.latest_data_at > timedelta(minutes=sla)),
+            }))
+        status = latest.status if latest else MonitoringStatus.NOT_RUN
+        due = previous_occurrence(policy, now)
+        if due and now >= due + timedelta(minutes=policy.start_grace_minutes) and not hasattr(adapter, 'with_monitoring_policy'):
+            def attributed(run: CollectorRun | None) -> bool:
+                # 선언한 슬롯 시각이 있으면 지연 시작을 다른 회차로 재귀속하지 않는다.
+                # 시각이 없는 기존 수집기만 날짜·시작 시각 기반 귀속을 유지한다.
+                if run is None or run.execution_kind not in (None, 'scheduled'):
+                    return False
+                if run.scheduled_at is not None:
+                    return run.scheduled_at == due and due <= run.started_at < due + timedelta(minutes=policy.schedule_attribution_window_minutes)
+                return bool(
+                    (run.execution_kind is None or run.scheduled_date == due.astimezone(ZoneInfo(policy.timezone_name)).date())
+                    and previous_occurrence(policy, run.started_at) == due
+                    and run.started_at < due + timedelta(minutes=policy.schedule_attribution_window_minutes)
+                )
+
+            candidates = controlled.list_runs(started_from=due,
+                started_to=min(now, due + timedelta(minutes=policy.schedule_attribution_window_minutes)), limit=1)
+            candidate = candidates[0] if candidates else None
+            if candidate is not None and attributed(candidate):
+                latest = candidate
+                status = latest.status
+            if not attributed(latest):
+                status = MonitoringStatus.NOT_RUN
+        if policy.monitoring_enabled and latest and latest.status == MonitoringStatus.RUNNING and policy.max_duration_minutes is not None and now - latest.started_at > timedelta(minutes=policy.max_duration_minutes):
+            status = MonitoringStatus.ABORTED
+        overdue = any(item.freshness_overdue for item in freshness)
+        if overdue and status in (MonitoringStatus.SUCCESS, MonitoringStatus.SUCCESS_EMPTY):
+            status = MonitoringStatus.WARNING
+        return CollectorSummary(collector_id=adapter.collector_id, display_name=adapter.display_name,
+            status=status, latest_run=latest, schedule_timezone=policy.timezone_name,
+            daily_scheduled_time=None, max_duration_minutes=policy.max_duration_minutes,
+            last_successful_check_at=checked, latest_data_at=max((item.latest_data_at for item in freshness if item.latest_data_at), default=None),
+            freshness_overdue=overdue, freshness=freshness, policy_source=record['policy_source'],
+            policy_warning=record['warning'], policy_updated_at=record['updated_at'])
 
     def latest(self) -> ServiceResult[CollectorRun]:
         """호환용 저장 최신 실행 조회이며 동적 정책 상태를 적용하지 않는다."""
@@ -501,6 +566,7 @@ class MonitoringService:
         self,
         *,
         collector_id: str | None = None,
+        scope_id: str | None = None,
         started_from: datetime | None = None,
         started_to: datetime | None = None,
         status: MonitoringStatus | None = None,
@@ -522,9 +588,14 @@ class MonitoringService:
             filter_conditions["status"] = status
 
         def load(adapter: CollectorAdapter) -> tuple[int, list[CollectorRun]]:
-            total = adapter.count_runs(**filter_conditions)
+            conditions = dict(filter_conditions)
+            if scope_id is not None:
+                if not getattr(adapter, "supports_scope_filter", False):
+                    return 0, []
+                conditions["scope_id"] = scope_id
+            total = adapter.count_runs(**conditions)
             items = adapter.list_runs(
-                **filter_conditions,
+                **conditions,
                 offset=candidate_offset,
                 limit=candidate_limit,
             )
@@ -553,9 +624,7 @@ class MonitoringService:
             total=total,
         )
 
-    def get_run(
-        self, collector_id: str, run_id: UUID
-    ) -> ServiceResult[CollectorRun]:
+    def get_run(self, collector_id: str, run_id: UUID) -> ServiceResult[CollectorRun]:
         adapter = self._registered(collector_id)
         values, errors, availability = self._run_parallel(
             [adapter], lambda source: source.get_run(run_id)

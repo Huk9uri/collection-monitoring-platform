@@ -7,6 +7,16 @@ from pydantic import SecretStr
 from monitoring_api.adapters.base import CollectorAdapter
 from monitoring_api.adapters.fcdaum import FcDaumAdapter
 from monitoring_api.adapters.hmr import HmrAdapter
+from monitoring_api.adapters.naver_review import NaverReviewAdapter
+from monitoring_api.adapters.smartplace import (
+    ExpectedScope,
+    SmartPlaceAdapter,
+    SmartPlacePolicy,
+)
+from monitoring_api.adapters.naver_store_hours import (
+    NaverStoreHoursAdapter,
+    StoreHoursPolicy,
+)
 from monitoring_api.config import Settings
 from monitoring_api.db import ReadOnlyRepository
 from monitoring_api.services.monitoring import CollectorPolicy, MonitoringService
@@ -72,6 +82,76 @@ def build_monitoring_service(settings: Settings) -> MonitoringService:
                 dataset_id: timedelta(minutes=minutes)
                 for dataset_id, minutes in settings.hmr_freshness_sla_minutes.items()
             },
+        )
+    if connection_string := _reveal(settings.smartplace_connection_string):
+        smartplace_policy = None
+        if settings.smartplace_schedule_timezone is not None:
+            assert settings.smartplace_daily_scheduled_time is not None
+            assert settings.smartplace_start_grace_minutes is not None
+            assert settings.smartplace_max_duration_minutes is not None
+            smartplace_policy = SmartPlacePolicy(
+                schedule_timezone=settings.smartplace_schedule_timezone,
+                daily_scheduled_time=settings.smartplace_daily_scheduled_time,
+                start_grace=timedelta(minutes=settings.smartplace_start_grace_minutes),
+                max_duration=timedelta(
+                    minutes=settings.smartplace_max_duration_minutes
+                ),
+                attribution_window=timedelta(
+                    minutes=(settings.smartplace_schedule_attribution_window_minutes)
+                ),
+                expected_scopes=tuple(
+                    ExpectedScope(scope_id=scope_id, scope_name=scope_name)
+                    for scope_id, scope_name in settings.smartplace_expected_scopes.items()
+                ),
+            )
+        adapters.append(
+            SmartPlaceAdapter(
+                ReadOnlyRepository(
+                    connection_string,
+                    connect_timeout_seconds=settings.db_connect_timeout_seconds,
+                    query_timeout_seconds=settings.db_query_timeout_seconds,
+                ),
+                policy=smartplace_policy,
+            )
+        )
+    if connection_string := _reveal(settings.naver_store_hours_connection_string):
+        policy = None
+        if settings.naver_store_hours_schedule_timezone is not None:
+            policy = StoreHoursPolicy(
+                schedule_timezone=settings.naver_store_hours_schedule_timezone,
+                weekly_scheduled_day=settings.naver_store_hours_weekly_scheduled_day,
+                weekly_scheduled_time=settings.naver_store_hours_weekly_scheduled_time,
+                start_grace=timedelta(
+                    minutes=settings.naver_store_hours_start_grace_minutes
+                ),
+                max_duration=timedelta(
+                    minutes=settings.naver_store_hours_max_duration_minutes
+                ),
+                attribution_window=timedelta(
+                    minutes=settings.naver_store_hours_schedule_attribution_window_minutes
+                ),
+            )
+        adapters.append(
+            NaverStoreHoursAdapter(
+                ReadOnlyRepository(
+                    connection_string,
+                    connect_timeout_seconds=settings.db_connect_timeout_seconds,
+                    query_timeout_seconds=settings.db_query_timeout_seconds,
+                ),
+                policy=policy,
+            )
+        )
+    if connection_string := _reveal(settings.naver_review_connection_string):
+        repository = ReadOnlyRepository(
+            connection_string,
+            connect_timeout_seconds=settings.db_connect_timeout_seconds,
+            query_timeout_seconds=settings.db_query_timeout_seconds,
+        )
+        adapters.extend(
+            (
+                NaverReviewAdapter(repository, review_kind="visitor"),
+                NaverReviewAdapter(repository, review_kind="blog"),
+            )
         )
     return MonitoringService(
         adapters,

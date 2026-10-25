@@ -98,6 +98,39 @@ def test_fcdaum_retry_success_is_warning_and_all_attempts_are_preserved() -> Non
     assert repository.calls[-1] == (FCDAUM_ATTEMPTS_SQL, (RUN_ID_1,))
 
 
+def test_fcdaum_preserves_unconfirmed_attempt_counts_as_unknown() -> None:
+    """실패 전에 확인하지 못한 건수를 정상 0으로 바꾸지 않는다."""
+
+    attempt = _attempt(
+        1,
+        "SUCCESS",
+        source_count=1,
+        inserted_count=1,
+        committed=True,
+    )
+    attempt.update(
+        source_count=None,
+        inserted_count=None,
+        changed_count=None,
+        unchanged_count=None,
+    )
+    repository = FixtureRepository(
+        {
+            FCDAUM_LATEST_SQL: [_run_row()],
+            FCDAUM_ATTEMPTS_SQL: [attempt],
+        }
+    )
+
+    run = FcDaumAdapter(repository).latest()
+
+    assert run is not None
+    assert run.source_count is None
+    assert run.inserted_count is None
+    assert run.changed_count is None
+    assert run.unchanged_count is None
+    assert run.attempts[0].source_count is None
+
+
 def test_fcdaum_raw_aborted_wins_when_an_audit_attempt_is_missing() -> None:
     repository = FixtureRepository(
         {

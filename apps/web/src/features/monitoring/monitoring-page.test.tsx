@@ -34,6 +34,8 @@ const successfulRun: CollectorRun = {
   status: 'SUCCESS',
   successful_units: 2,
   failed_units: 0,
+  scope_id: null,
+  scope_name: null,
   source_count: 10,
   inserted_count: 4,
   changed_count: 2,
@@ -154,6 +156,7 @@ function toCollectorSummary(run: CollectorRun): CollectorSummary {
 }
 
 interface ApiScenario {
+  detail?: CollectorRun
   runs?: CollectorRun[]
   collectors?: CollectorSummary[]
   errors?: SourceError[]
@@ -165,6 +168,7 @@ interface ApiScenario {
 }
 
 function mockApi({
+  detail = partialFailedRun,
   runs = [successfulRun, partialFailedRun],
   collectors = runs.map(toCollectorSummary),
   errors = [],
@@ -219,7 +223,7 @@ function mockApi({
         ? { items: serverRuns, errors, source_status: sourceStatus, total }
         : url.includes('/runs/')
           ? {
-              items: [partialFailedRun],
+              items: [detail],
               errors: [],
               source_status: availableSourceStatus,
             }
@@ -264,6 +268,50 @@ afterEach(() => {
 })
 
 describe('MonitoringPage', () => {
+  it.each([
+    ['ABORTED', 'RUNNING', '중단', '장애1'],
+    ['WARNING', 'SUCCESS', '주의', '주의1'],
+  ] as const)('리뷰 %s 서버 정책 결과를 저장 실행 상태 %s와 분리해 표시한다', async (status, storedStatus, label, kpi) => {
+    const scheduled: CollectorRun = { ...successfulRun, collector_id: 'naver-review-blog',
+      execution_kind: 'scheduled', target_kind: 'all-stores', status: storedStatus }
+    mockApi({ runs: [scheduled], collectors: [{ ...toCollectorSummary(scheduled),
+      display_name: '네이버 블로그 리뷰', status }] })
+    renderPage()
+    const card = await screen.findByRole('article', { name: '네이버 블로그 리뷰 최신 상태' })
+    expect(within(card).getByText(label)).toBeTruthy()
+    expect(screen.getByRole('region', { name: '수집기 상태 요약' }).textContent).toContain(kpi)
+    const table = screen.getByRole('table', { name: '수집 실행 이력' })
+    expect(within(table).getByText(storedStatus === 'RUNNING' ? '실행 중' : '정상')).toBeTruthy()
+  })
+
+  it('리뷰 수동 성공은 이력과 인라인 상세에 표시하고 서버의 정기 미실행 카드와 KPI를 유지한다', async () => {
+    const manual: CollectorRun = { ...successfulRun, collector_id: 'naver-review-visitor',
+      execution_kind: 'manual', target_kind: 'single-store', target_place_id: '777', target_store_count: 1,
+      successful_units: 1, failed_units: 0 }
+    mockApi({ runs: [manual], detail: manual,
+      collectors: [{ ...toCollectorSummary(manual), display_name: '네이버 방문자 리뷰', status: 'NOT_RUN', latest_run: null }] })
+    renderPage()
+    const card = await screen.findByRole('article', { name: '네이버 방문자 리뷰 최신 상태' })
+    expect(within(card).getByText('미실행')).toBeTruthy()
+    const kpis = screen.getByRole('region', { name: '수집기 상태 요약' })
+    expect(kpis.textContent).toContain('정상0')
+    expect(kpis.textContent).toContain('미실행1')
+    const table = screen.getByRole('table', { name: '수집 실행 이력' })
+    expect(within(table).getByText('네이버 방문자 리뷰')).toBeTruthy()
+    expect(within(table).getByText('수동 실행')).toBeTruthy()
+    expect(within(table).getByText('단일 매장')).toBeTruthy()
+    expect(within(table).queryByText('777')).toBeNull()
+    fireEvent.click(within(table).getByRole('button', { name: `실행 ${manual.run_id} 상세 보기` }))
+    const detail = await within(table).findByRole('region', { name: '실행 상세' })
+    await waitFor(() => expect(within(detail).getByText('777')).toBeTruthy())
+    expect(within(detail).getByText('수동 실행')).toBeTruthy()
+    const field = (label: string) => within(detail).getByText(label, { selector: 'dt' }).parentElement?.querySelector('dd')?.textContent
+    expect(field('대상 매장')).toBe('1')
+    expect(field('성공 매장')).toBe('1')
+    expect(field('실패 매장')).toBe('0')
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
   it('읽기 전용 헤더에 제목과 수동 새로고침만 제공한다', () => {
     mockApi({ pending: true })
     renderPage()
@@ -272,7 +320,7 @@ describe('MonitoringPage', () => {
       screen.getByRole('heading', { name: '데이터 수집 모니터링' }),
     ).toBeTruthy()
     expect(screen.getByRole('button', { name: '새로고침' })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: /실행/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /재실행|중지|재시도/ })).toBeNull()
   })
 
   it('첫 조회 중에는 접근 가능한 로딩 상태를 표시한다', () => {
@@ -363,16 +411,16 @@ describe('MonitoringPage', () => {
     expect(within(alert).getByRole('button', { name: '다시 시도' })).toBeTruthy()
   })
 
-  it('부분 데이터 소스 장애를 알리면서 정상 결과와 네 영역을 유지한다', async () => {
+  it('부분 데이터 소스 장애를 알리면서 정상 결과와 세 영역을 유지한다', async () => {
     mockApi({ errors: [sourceError] })
     renderPage()
 
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain('FC다움')
     expect(alert.textContent).toContain('데이터 소스를 조회할 수 없습니다.')
-    expect(screen.getByRole('region', { name: '전체 현황' })).toBeTruthy()
+    expect(screen.getByRole('region', { name: '수집기 상태 요약' })).toBeTruthy()
     expect(screen.getByRole('region', { name: '수집기 현황' })).toBeTruthy()
-    expect(screen.getByRole('region', { name: '데이터 신선도' })).toBeTruthy()
+    expect(screen.queryByRole('region', { name: '데이터 신선도' })).toBeNull()
     expect(screen.getByRole('region', { name: '실행 이력' })).toBeTruthy()
     expect(screen.getByRole('main')).toBeTruthy()
   })
@@ -421,24 +469,53 @@ describe('MonitoringPage', () => {
     expect(alert.textContent).not.toContain('일부 데이터를')
   })
 
-  it('KPI와 수집기·신선도·실행 이력에 실제 조회 결과를 표시한다', async () => {
-    mockApi({ summary: baseSummary })
+  it('KPI와 수집기·실행 이력에 실제 조회 결과를 표시한다', async () => {
+    const collectors = [
+      toCollectorSummary(successfulRun),
+      toCollectorSummary({
+        ...successfulRun,
+        collector_id: 'fcdaum',
+        run_id: '00000000-0000-4000-8000-000000000004',
+      }),
+      {
+        ...toCollectorSummary({
+          ...failedRun,
+          collector_id: 'smartplace',
+        }),
+        display_name: 'SmartPlace',
+      },
+      {
+        ...toCollectorSummary({
+          ...failedRun,
+          collector_id: 'naver-store-hours',
+          run_id: '00000000-0000-4000-8000-000000000005',
+        }),
+        display_name: '네이버 매장 영업시간',
+      },
+    ]
+    mockApi({
+      collectors,
+      summary: {
+        ...baseSummary,
+        registered_collectors: 4,
+        today_success_runs: 0,
+        today_incident_runs: 8,
+      },
+    })
     renderPage()
 
-    const kpis = await screen.findByRole('region', { name: '전체 현황' })
-    expect(kpis.textContent).toContain('전체 수집기2')
-    expect(kpis.textContent).toContain('오늘 정상3')
-    expect(kpis.textContent).toContain('오늘 장애1')
+    const kpis = await screen.findByRole('region', { name: '수집기 상태 요약' })
+    expect(kpis.textContent).toContain('전체 수집기4')
+    expect(kpis.textContent).toContain('정상2')
+    expect(kpis.textContent).toContain('장애2')
+    expect(kpis.textContent).toContain('실행 중0')
     expect(screen.getByRole('article', { name: 'HMR 최신 상태' })).toBeTruthy()
     expect(screen.getByRole('article', { name: 'FC다움 최신 상태' })).toBeTruthy()
-    expect(screen.getByRole('table', { name: '데이터 신선도' })).toBeTruthy()
-    expect(screen.getByText('마지막 성공 확인')).toBeTruthy()
-    expect(screen.getByText('최신 데이터 시각')).toBeTruthy()
-    expect(screen.getByText('SLA 초과')).toBeTruthy()
+    expect(screen.queryByRole('table', { name: '데이터 신선도' })).toBeNull()
     expect(screen.getByRole('table', { name: '수집 실행 이력' })).toBeTruthy()
   })
 
-  it('수집기 snapshot의 중첩 신선도를 표시하고 freshness endpoint는 호출하지 않는다', async () => {
+  it('신선도 데이터가 있어도 영역을 표시하거나 별도 조회하지 않는다', async () => {
     const snapshotFreshness: FreshnessRecord = {
       ...freshness[0]!,
       dataset_id: 'collector-snapshot',
@@ -453,7 +530,9 @@ describe('MonitoringPage', () => {
 
     renderPage()
 
-    expect(await screen.findByText('collector-snapshot')).toBeTruthy()
+    await screen.findByRole('region', { name: '수집기 현황' })
+    expect(screen.queryByText('collector-snapshot')).toBeNull()
+    expect(screen.queryByRole('region', { name: '데이터 신선도' })).toBeNull()
     expect(
       request.mock.calls.some(([path]) => String(path).endsWith('/freshness')),
     ).toBe(false)
@@ -708,23 +787,79 @@ describe('MonitoringPage', () => {
     ).toEqual(['collectors', 'runs', 'summary'])
   })
 
-  it('실행을 선택하면 상세를 조회해 서울 시각과 하위 작업을 표시한다', async () => {
+  it('RUN ID를 선택하면 해당 행 아래에 상세를 펼치고 다시 선택하면 접는다', async () => {
     const request = mockApi()
     renderPage()
-    await screen.findByRole('table', { name: '수집 실행 이력' })
+    const runsTable = await screen.findByRole('table', { name: '수집 실행 이력' })
+    const trigger = screen.getByRole('button', {
+      name: `실행 ${partialFailedRun.run_id} 상세 보기`,
+    })
 
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: `실행 ${partialFailedRun.run_id} 상세 보기`,
-      }),
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(trigger)
+
+    const detail = await within(runsTable).findByRole('region', {
+      name: '실행 상세',
+    })
+    expect(trigger.getAttribute('aria-expanded')).toBe('true')
+    expect(detail.closest('tr')?.previousElementSibling?.textContent).toContain(
+      partialFailedRun.run_id,
     )
-
-    const dialog = await screen.findByRole('dialog', { name: '실행 상세' })
-    expect(await within(dialog).findByText('한촌설렁탕')).toBeTruthy()
-    expect(within(dialog).getByText('2026. 9. 8. 10:00')).toBeTruthy()
+    expect(await within(detail).findByText('한촌설렁탕')).toBeTruthy()
+    expect(within(detail).getByText('2026. 9. 8. 10:00')).toBeTruthy()
+    expect(screen.queryByRole('dialog')).toBeNull()
     expect(request).toHaveBeenCalledWith(
       `/api/v1/monitoring/runs/fcdaum/${partialFailedRun.run_id}`,
       undefined,
     )
+
+    fireEvent.click(trigger)
+
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+    expect(within(runsTable).queryByRole('region', { name: '실행 상세' })).toBeNull()
+  })
+
+  it('다른 RUN ID를 선택하면 기존 상세를 닫고 선택한 행 아래만 펼친다', async () => {
+    mockApi()
+    renderPage()
+    const runsTable = await screen.findByRole('table', { name: '수집 실행 이력' })
+    const firstTrigger = screen.getByRole('button', {
+      name: `실행 ${successfulRun.run_id} 상세 보기`,
+    })
+    const secondTrigger = screen.getByRole('button', {
+      name: `실행 ${partialFailedRun.run_id} 상세 보기`,
+    })
+
+    fireEvent.click(firstTrigger)
+    await within(runsTable).findByRole('region', { name: '실행 상세' })
+    fireEvent.click(secondTrigger)
+
+    await waitFor(() => {
+      expect(firstTrigger.getAttribute('aria-expanded')).toBe('false')
+      expect(secondTrigger.getAttribute('aria-expanded')).toBe('true')
+      expect(
+        within(runsTable).getAllByRole('region', { name: '실행 상세' }),
+      ).toHaveLength(1)
+    })
+    expect(
+      within(runsTable)
+        .getByRole('region', { name: '실행 상세' })
+        .closest('tr')?.previousElementSibling?.textContent,
+    ).toContain(partialFailedRun.run_id)
+  })
+})
+
+it('브랜드 URL을 서버 조건으로 복원하고 변경 시 첫 페이지부터 조회한다', async () => {
+  window.history.replaceState(null, '', '/?brand=hanchon&page=2')
+  const request = mockApi({ total: 45 })
+  renderPage()
+  await screen.findByRole('table', { name: '수집 실행 이력' })
+  expect(screen.getByLabelText('브랜드 필터')).toHaveProperty('value', 'hanchon')
+  expect(request).toHaveBeenCalledWith('/api/v1/monitoring/runs', { params: expect.objectContaining({ scope_id: 'hanchon', offset: 20 }) })
+  fireEvent.change(screen.getByLabelText('브랜드 필터'), { target: { value: 'yuksoodang' } })
+  await waitFor(() => {
+    expect(new URLSearchParams(window.location.search).get('brand')).toBe('yuksoodang')
+    expect(new URLSearchParams(window.location.search).get('page')).toBeNull()
+    expect(request).toHaveBeenCalledWith('/api/v1/monitoring/runs', { params: expect.objectContaining({ scope_id: 'yuksoodang', offset: 0 }) })
   })
 })

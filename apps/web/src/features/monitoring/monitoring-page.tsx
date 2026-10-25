@@ -7,7 +7,6 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { AppLayout } from '../../components/layout/app-layout'
 import { CollectorCard } from './components/collector-card'
-import { FreshnessSummary } from './components/freshness-summary'
 import { KpiCards } from './components/kpi-cards'
 import {
   MonitoringEmpty,
@@ -16,7 +15,6 @@ import {
   MonitoringPartialAlert,
 } from './components/monitoring-state'
 import { PageHeader } from './components/page-header'
-import { RunDetailSheet } from './components/run-detail-sheet'
 import {
   MAX_RUNS_PAGE,
   RUNS_PAGE_SIZE,
@@ -98,6 +96,7 @@ function readUrlState(): MonitoringUrlState {
     from: from.value,
     to: to.value,
     collector: params.get('collector') ?? '',
+    brand: ['hanchon', 'yuksoodang'].includes(params.get('brand') ?? '') ? params.get('brand')! : '',
     status: parsedStatus.success ? parsedStatus.data : '',
   }
   const initialErrors: RunFilterErrors = {}
@@ -122,6 +121,7 @@ function writeUrlState(state: MonitoringUrlState, replace = false) {
   if (filters.to) params.set('to', filters.to)
   if (filters.collector) params.set('collector', filters.collector)
   if (filters.status) params.set('status', filters.status)
+  if (filters.brand) params.set('brand', filters.brand)
   if (page > 1) params.set('page', String(page))
 
   const search = params.toString()
@@ -178,6 +178,7 @@ export function MonitoringPage() {
   const runConditions = useMemo(
     () => ({
       collectorId: urlState.filters.collector || undefined,
+      scopeId: urlState.filters.brand || undefined,
       startedFrom: seoulDayBoundary(urlState.filters.from, false),
       startedTo: seoulDayBoundary(urlState.filters.to, true),
       status: urlState.filters.status || undefined,
@@ -281,7 +282,11 @@ export function MonitoringPage() {
   }
 
   function selectRun(run: CollectorRun) {
-    setSelectedRun({ collectorId: run.collector_id, runId: run.run_id })
+    setSelectedRun((current) =>
+      current?.collectorId === run.collector_id && current.runId === run.run_id
+        ? null
+        : { collectorId: run.collector_id, runId: run.run_id },
+    )
   }
 
   const collectorIds = Array.from(
@@ -292,8 +297,6 @@ export function MonitoringPage() {
       ].map((run) => run.collector_id),
     ),
   )
-  const freshnessItems =
-    collectorsQuery.data?.items.flatMap((summary) => summary.freshness) ?? []
 
   return (
     <AppLayout header={<PageHeader onRefresh={refresh} isRefreshing={isFetching} />}>
@@ -307,7 +310,7 @@ export function MonitoringPage() {
         <div className="space-y-6">
           <MonitoringPartialAlert errors={sourceErrors} failedAreas={failedAreas} />
 
-          <KpiCards summary={summaryQuery.data} />
+          <KpiCards collectors={collectorsQuery.data?.items} />
 
           <section aria-label="수집기 현황" className="space-y-3">
             <div>
@@ -326,8 +329,6 @@ export function MonitoringPage() {
             </div>
           </section>
 
-          <FreshnessSummary items={freshnessItems} />
-
           <RunsTable
             runs={runsQuery.data?.items ?? []}
             total={runsQuery.data?.total ?? 0}
@@ -338,22 +339,18 @@ export function MonitoringPage() {
             onFiltersChange={changeFilters}
             onPageChange={changePage}
             onSelectRun={selectRun}
+            selectedCollectorId={selectedRun?.collectorId}
+            selectedRunId={selectedRun?.runId}
+            detailRun={detailQuery.data?.items[0]}
+            isDetailLoading={detailQuery.isPending && selectedRun !== null}
+            detailError={
+              detailQuery.error ??
+              (detailQuery.data?.errors.length ? detailQuery.data.errors : undefined)
+            }
           />
         </div>
       )}
 
-      <RunDetailSheet
-        open={selectedRun !== null}
-        onOpenChange={(open) => {
-          if (!open) setSelectedRun(null)
-        }}
-        run={detailQuery.data?.items[0]}
-        isLoading={detailQuery.isPending && selectedRun !== null}
-        error={
-          detailQuery.error ??
-          (detailQuery.data?.errors.length ? detailQuery.data.errors : undefined)
-        }
-      />
     </AppLayout>
   )
 }

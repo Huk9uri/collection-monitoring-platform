@@ -29,6 +29,7 @@ MAX_RUN_RANGE = timedelta(days=93)
 class RunQuery(BaseModel):
     """실행 목록의 검증된 서버측 필터와 페이지 조건이다."""
 
+    scope_id: str | None = Field(default=None, max_length=100)
     collector_id: str | None = None
     started_from: datetime | None = None
     started_to: datetime | None = None
@@ -129,12 +130,11 @@ def runs(
 ) -> RunPageResult:
     """실행 이력을 제한된 기간과 페이지 크기로 조회한다."""
 
-    started_from, started_to = _resolve_run_range(
-        query.started_from, query.started_to
-    )
+    started_from, started_to = _resolve_run_range(query.started_from, query.started_to)
     try:
         return service.list_runs(
             collector_id=query.collector_id,
+            scope_id=query.scope_id,
             started_from=started_from,
             started_to=started_to,
             status=query.status,
@@ -145,9 +145,7 @@ def runs(
         raise _unknown_collector() from exc
 
 
-@router.get(
-    "/runs/{collector_id}/{run_id}", response_model=ServiceResult[CollectorRun]
-)
+@router.get("/runs/{collector_id}/{run_id}", response_model=ServiceResult[CollectorRun])
 def run_detail(
     collector_id: str,
     run_id: UUID,

@@ -43,6 +43,7 @@ export async function getRuns(conditions: RunsQueryConditions) {
   return getParsed('/api/v1/monitoring/runs', runsResponseSchema, {
     params: {
       collector_id: validated.collectorId,
+      ...(validated.scopeId ? { scope_id: validated.scopeId } : {}),
       started_from: validated.startedFrom,
       started_to: validated.startedTo,
       status: validated.status,
